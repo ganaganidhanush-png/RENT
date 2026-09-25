@@ -20,7 +20,7 @@ export default async function DashboardPage() {
 
   try {
     // 1. Fetch Rooms
-    const { data: dbRooms, error: roomsErr } = await supabase
+    const { data: dbRooms } = await supabase
       .from('rooms')
       .select('*')
       .order('room_number');

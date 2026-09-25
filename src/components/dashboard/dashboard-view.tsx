@@ -3,9 +3,8 @@
 import React from 'react';
 import Link from 'next/link';
 import { 
-  Building2, Users, IndianRupee, AlertCircle, 
-  CalendarClock, ArrowUpRight, Plus, ShieldCheck, CheckCircle2,
-  Clock, PhoneCall, Wallet
+  Building2, IndianRupee, AlertCircle, 
+  CalendarClock, ArrowUpRight, Plus, ShieldCheck, CheckCircle2
 } from 'lucide-react';
 import { Room, Payment, Tenant } from '@/types/database';
 

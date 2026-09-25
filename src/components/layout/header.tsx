@@ -29,6 +29,14 @@ export default function Header() {
           Add Tenant
         </Link>
 
+        <button 
+          type="button" 
+          aria-label="Notifications"
+          className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors"
+        >
+          <Bell className="w-4 h-4" />
+        </button>
+
         <div className="h-5 w-px bg-slate-200" />
 
         <div className="flex items-center gap-2.5">

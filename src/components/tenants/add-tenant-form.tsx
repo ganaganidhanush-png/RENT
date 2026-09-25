@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { 
-  ShieldCheck, FileText, User, Phone, CheckCircle, 
+  ShieldCheck, FileText, User, CheckCircle, 
   Loader2, AlertCircle, ArrowLeft 
 } from 'lucide-react';
 import Link from 'next/link';
@@ -49,7 +49,7 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
   useEffect(() => {
     async function loadRooms() {
       try {
-        const { data, error } = await supabase
+        const { data } = await supabase
           .from('rooms')
           .select('*')
           .eq('status', 'VACANT')
@@ -168,10 +168,11 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
         router.push('/');
         router.refresh();
       }, 1000);
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to register tenant. Please check Supabase table configuration.';
       setStatusMessage({ 
         type: 'error', 
-        text: err.message || 'Failed to register tenant. Please check Supabase table configuration.' 
+        text: message 
       });
     } finally {
       setLoading(false);
