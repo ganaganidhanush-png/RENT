@@ -4,10 +4,13 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { 
   Users, Plus, Phone, ArrowLeft, Mail, Calendar, 
-  GraduationCap, Edit3, Trash2, CreditCard, LogOut 
+  GraduationCap, Edit3, Trash2, CreditCard, LogOut, Sparkles 
 } from 'lucide-react';
 import { Tenant, Room, Payment } from '@/types/database';
-import { getLocalTenants, deleteLocalTenant, getLocalRooms, saveLocalTenant } from '@/lib/store/app-store';
+import { 
+  getLocalTenants, deleteLocalTenant, getLocalRooms, saveLocalTenant,
+  getLocalPayments, mergeTenants, mergeRooms 
+} from '@/lib/store/app-store';
 import { createClient } from '@/lib/supabase/client';
 import EditTenantModal from '@/components/tenants/edit-tenant-modal';
 import RecordPaymentModal from '@/components/payments/record-payment-modal';
@@ -25,6 +28,7 @@ function getOrdinal(d: number) {
 export default function TenantsPage() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [payments, setPayments] = useState<Payment[]>([]);
   const [editingTenant, setEditingTenant] = useState<Tenant | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingPayment, setEditingPayment] = useState<Payment | null>(null);
@@ -34,31 +38,44 @@ export default function TenantsPage() {
 
   useEffect(() => {
     async function loadData() {
+      const localTenants = getLocalTenants();
       const localRooms = getLocalRooms();
+      const localPayments = getLocalPayments();
+      setTenants(localTenants);
       setRooms(localRooms);
+      setPayments(localPayments);
 
       try {
         const supabase = createClient();
-        const { data, error } = await supabase
-          .from('tenants')
-          .select('*, room:rooms(*)')
-          .order('created_at', { ascending: false });
+        const [{ data: tenantsData }, { data: roomsData }, { data: paymentsData }] = await Promise.all([
+          supabase.from('tenants').select('*, room:rooms(*)').order('created_at', { ascending: false }),
+          supabase.from('rooms').select('*').order('floor').order('room_number'),
+          supabase.from('payments').select('*, room:rooms(*), tenant:tenants(*)').order('created_at', { ascending: false })
+        ]);
 
-        if (!error && data && data.length > 0) {
-          setTenants(data);
-        } else {
-          setTenants(getLocalTenants());
+        const mergedT = mergeTenants(localTenants, tenantsData || []);
+        const mergedR = mergeRooms(localRooms, roomsData || [], mergedT);
+        setTenants(mergedT);
+        setRooms(mergedR);
+        if (paymentsData && paymentsData.length > 0) {
+          const pMap = new Map<string, Payment>();
+          paymentsData.forEach((p) => pMap.set(p.id, p));
+          localPayments.forEach((p) => pMap.set(p.id, p));
+          setPayments(Array.from(pMap.values()));
         }
-      } catch {
-        setTenants(getLocalTenants());
+      } catch (err) {
+        console.warn('Tenants page fetch note:', err);
       }
     }
 
     loadData();
 
     const handleDataChange = () => {
-      setRooms(getLocalRooms());
-      setTenants(getLocalTenants());
+      const lt = getLocalTenants();
+      const lr = getLocalRooms();
+      setTenants(lt);
+      setRooms(mergeRooms(lr, [], lt));
+      setPayments(getLocalPayments());
     };
 
     window.addEventListener('rentvault_data_updated', handleDataChange);
@@ -371,6 +388,77 @@ export default function TenantsPage() {
                     <p className="font-bold text-slate-900">Emergency Contact ({t.emergency_contact_relation}):</p>
                     <p className="font-medium">{t.emergency_contact_name} • <span className="font-bold text-slate-900">{t.emergency_contact_phone}</span></p>
                   </div>
+
+                  {/* Smart Advance / Deposit Slices Status Tracker */}
+                  {(() => {
+                    const depositPayments = payments.filter((p) => p.tenant_id === t.id && p.payment_type === 'SECURITY_DEPOSIT');
+                    const totalAdvancePaid = depositPayments.reduce((sum, p) => sum + Number(p.amount_paid || 0), 0) || Number(t.security_deposit_paid || 0);
+                    const targetDeposit = Number(t.room?.security_deposit || t.security_deposit_paid || 0);
+                    const isAdvanceComplete = totalAdvancePaid >= targetDeposit && targetDeposit > 0;
+                    const advancePending = Math.max(0, targetDeposit - totalAdvancePaid);
+
+                    return (
+                      <div className="mt-3 p-2.5 rounded-xl bg-slate-50 border border-slate-200 flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
+                        <span className="font-bold text-slate-800 flex items-center gap-1">
+                          <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                          Advance Slices:
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          {isAdvanceComplete ? (
+                            <span className="font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-md">
+                              🟢 Full Deposit (₹{totalAdvancePaid.toLocaleString('en-IN')})
+                            </span>
+                          ) : advancePending > 0 ? (
+                            <span className="font-bold text-amber-900 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-md">
+                              🟡 ₹{totalAdvancePaid.toLocaleString('en-IN')} / ₹{targetDeposit.toLocaleString('en-IN')} (₹{advancePending.toLocaleString('en-IN')} due)
+                            </span>
+                          ) : (
+                            <span className="font-bold text-slate-700 bg-slate-200 px-2 py-0.5 rounded-md">
+                              ₹{totalAdvancePaid.toLocaleString('en-IN')}
+                            </span>
+                          )}
+
+                          {!isAdvanceComplete && advancePending > 0 && t.status !== 'MOVED_OUT' && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const roomObj = rooms.find((r) => r.id === t.room_id) || t.room || undefined;
+                                const now = new Date();
+                                const currentMonthIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+                                const monthStr = now.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+                                setEditingPayment({
+                                  id: `pay-advance-${Date.now()}`,
+                                  tenant_id: t.id,
+                                  room_id: t.room_id || '',
+                                  billing_period_month: currentMonthIso,
+                                  billing_month: monthStr,
+                                  amount_due: targetDeposit,
+                                  amount_paid: advancePending,
+                                  amount_pending: 0,
+                                  payment_status: 'PAID',
+                                  payment_date: new Date().toISOString().split('T')[0],
+                                  payment_method: 'UPI',
+                                  payment_type: 'SECURITY_DEPOSIT',
+                                  installment_number: (depositPayments.length || 1) + 1,
+                                  total_target_amount: targetDeposit,
+                                  received_by: 'LANDLORD',
+                                  notes: `Advance installment slice #${(depositPayments.length || 1) + 1} for ${t.full_name}.`,
+                                  created_at: new Date().toISOString(),
+                                  tenant: t,
+                                  room: roomObj,
+                                });
+                                setIsPaymentModalOpen(true);
+                              }}
+                              className="px-2 py-0.5 text-[10px] font-black text-indigo-700 hover:text-indigo-900 bg-indigo-100 hover:bg-indigo-200 rounded border border-indigo-300 transition-colors cursor-pointer"
+                              title="Record next slice of advance"
+                            >
+                              + Record Slice
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Card Footer: Financials & Actions */}
@@ -380,8 +468,8 @@ export default function TenantsPage() {
                       ₹{Number(t.monthly_rent).toLocaleString('en-IN')}
                       <span className="font-normal text-slate-500 text-xs"> /mo</span>
                     </span>
-                    <span className="text-[11px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded ml-2">
-                      Dep: ₹{Number(t.security_deposit_paid).toLocaleString('en-IN')}
+                    <span className="text-[11px] font-bold text-indigo-800 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded ml-2">
+                      Rent Due: {t.rent_due_day || 5}{getOrdinal(t.rent_due_day || 5)}
                     </span>
                   </div>
 

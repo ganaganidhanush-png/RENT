@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { Tenant, Room, BachelorOccupant, TenantType, TenantStatus } from '@/types/database';
 import { createClient } from '@/lib/supabase/client';
-import { saveLocalTenant, getLocalRooms } from '@/lib/store/app-store';
+import { saveLocalTenant, getLocalRooms, syncLocalRoomOccupancy } from '@/lib/store/app-store';
 
 interface EditTenantModalProps {
   tenant: Tenant | null;
@@ -190,6 +190,14 @@ function EditTenantModalContent({
           college_or_company: updatedTenant.college_or_company,
         })
         .eq('id', tenant.id);
+
+      // Smartly sync room status and occupancy in Supabase
+      if (updatedTenant.room_id) {
+        syncLocalRoomOccupancy(updatedTenant.room_id);
+      }
+      if (tenant.room_id && tenant.room_id !== updatedTenant.room_id) {
+        syncLocalRoomOccupancy(tenant.room_id);
+      }
     } catch (err) {
       console.warn('Supabase tenant update note:', err);
     }

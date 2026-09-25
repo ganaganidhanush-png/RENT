@@ -36,6 +36,7 @@ export default function RentReceiptModal({ payment, isOpen, onClose }: RentRecei
   };
 
   const categoryLabel = getCategoryLabel(payment.payment_type);
+  const sliceLabel = payment.installment_number ? ` (Slice #${payment.installment_number})` : '';
 
   const handlePrint = () => {
     window.print();
@@ -45,14 +46,14 @@ export default function RentReceiptModal({ payment, isOpen, onClose }: RentRecei
     const text = `*PAYMENT RECEIPT - ${profile.propertyName || 'RentVault Property'}*
 --------------------------------
 *Receipt No:* ${receiptNo}
-*Purpose / Type:* ${categoryLabel}
+*Purpose / Type:* ${categoryLabel}${sliceLabel}
 *Date:* ${payment.payment_date || new Date().toLocaleDateString('en-IN')}
 *Tenant:* ${tenantName}
 *Room:* Room ${roomNumber}
 *Period:* ${billingMonth}
 --------------------------------
-*Amount Paid:* ₹${amountPaidNum.toLocaleString('en-IN')}
-*Amount Due:* ₹${amountDueNum.toLocaleString('en-IN')}
+*Amount Paid in this Slice:* ₹${amountPaidNum.toLocaleString('en-IN')}
+${payment.total_target_amount ? `*Total Agreed Target:* ₹${Number(payment.total_target_amount).toLocaleString('en-IN')}\n` : ''}*Remaining Balance:* ₹${Number(payment.amount_pending || 0).toLocaleString('en-IN')}
 *Status:* ${payment.payment_status}
 *Payment Mode:* ${payment.payment_method || 'UPI'}
 ${payment.transaction_ref ? `*Ref / UTR:* ${payment.transaction_ref}\n` : ''}${payment.notes ? `*Notes:* ${payment.notes}\n` : ''}*Received By:* ${payment.received_by || profile.name || 'Landlord'}
@@ -155,18 +156,20 @@ Thank you for your payment!`;
 
           {/* Financial Breakdown */}
           <div className="p-3 border border-slate-200 rounded-xl space-y-1.5 text-xs text-slate-700">
+            {payment.total_target_amount && Number(payment.total_target_amount) > amountPaidNum && (
+              <div className="flex justify-between text-indigo-900 font-bold bg-indigo-50/70 p-1.5 rounded-lg border border-indigo-100">
+                <span>Total Agreed {categoryLabel}:</span>
+                <span>₹{Number(payment.total_target_amount).toLocaleString('en-IN')}</span>
+              </div>
+            )}
             <div className="flex justify-between">
-              <span>Total {categoryLabel} Due:</span>
-              <span className="font-semibold text-slate-900">₹{amountDueNum.toLocaleString('en-IN')}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Amount Paid this transaction:</span>
+              <span>{payment.installment_number ? `Amount Paid (Slice #${payment.installment_number}):` : 'Amount Paid this transaction:'}</span>
               <span className="font-bold text-emerald-700">₹{amountPaidNum.toLocaleString('en-IN')}</span>
             </div>
             <div className="flex justify-between border-t border-slate-200 pt-1.5 font-bold">
               <span>Remaining Pending Balance:</span>
-              <span className={Number(payment.amount_pending || 0) > 0 ? 'text-rose-600' : 'text-slate-900'}>
-                ₹{Number(payment.amount_pending || 0).toLocaleString('en-IN')}
+              <span className={Number(payment.amount_pending || 0) > 0 ? 'text-rose-600' : 'text-emerald-700'}>
+                {Number(payment.amount_pending || 0) > 0 ? `₹${Number(payment.amount_pending || 0).toLocaleString('en-IN')}` : '₹0 (Fully Settled)'}
               </span>
             </div>
           </div>

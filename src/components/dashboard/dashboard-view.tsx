@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { Room, Payment, Tenant, PaymentType } from '@/types/database';
 import { DEFAULT_ROOMS } from '@/lib/constants/rooms';
-import { getLocalRooms, getLocalTenants, getLocalPayments } from '@/lib/store/app-store';
+import { getLocalRooms, getLocalTenants, getLocalPayments, mergeTenants, mergeRooms } from '@/lib/store/app-store';
 import EditRoomModal from '@/components/rooms/edit-room-modal';
 import RecordPaymentModal from '@/components/payments/record-payment-modal';
 
@@ -35,21 +35,24 @@ export default function DashboardView({
   allTenants: initialAllTenants,
   stats: initialStats 
 }: DashboardProps) {
-  const [rooms, setRooms] = useState<Room[]>(() => {
-    if (initialRooms && initialRooms.length > 0) return initialRooms;
+  const [tenants, setTenants] = useState<Tenant[]>(() => {
     if (typeof window !== 'undefined') {
-      const local = getLocalRooms();
-      if (local && local.length > 0) return local;
+      const local = getLocalTenants();
+      if (local && local.length > 0) {
+        return mergeTenants(local, initialAllTenants || []);
+      }
     }
-    return DEFAULT_ROOMS;
+    return initialAllTenants && initialAllTenants.length > 0 ? initialAllTenants : [];
   });
 
-  const [tenants, setTenants] = useState<Tenant[]>(() => {
-    if (initialAllTenants && initialAllTenants.length > 0) return initialAllTenants;
+  const [rooms, setRooms] = useState<Room[]>(() => {
     if (typeof window !== 'undefined') {
-      return getLocalTenants();
+      const local = getLocalRooms();
+      if (local && local.length > 0) {
+        return mergeRooms(local, initialRooms || []);
+      }
     }
-    return [];
+    return initialRooms && initialRooms.length > 0 ? initialRooms : DEFAULT_ROOMS;
   });
 
   const [payments, setPayments] = useState<Payment[]>(() => {
@@ -66,17 +69,25 @@ export default function DashboardView({
   const [editingPayment, setEditingPayment] = useState<Payment | null>(null);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
 
-  // Live synchronization across pages
+  // Live synchronization across all pages
   useEffect(() => {
     const syncData = () => {
-      setRooms(getLocalRooms());
-      setTenants(getLocalTenants());
-      setPayments(getLocalPayments());
+      const localT = getLocalTenants();
+      const localR = getLocalRooms();
+      const localP = getLocalPayments();
+      const mergedT = mergeTenants(localT, initialAllTenants || []);
+      const mergedR = mergeRooms(localR, initialRooms || [], mergedT);
+      setTenants(mergedT);
+      setRooms(mergedR);
+      setPayments(localP);
     };
+
+    // Ensure immediate sync on client mount
+    syncData();
 
     window.addEventListener('rentvault_data_updated', syncData);
     return () => window.removeEventListener('rentvault_data_updated', syncData);
-  }, []);
+  }, [initialAllTenants, initialRooms]);
 
   const totalRoomsCount = rooms.length > 0 ? rooms.length : 6;
   const occupiedRoomsCount = rooms.filter((r) => r.status === 'OCCUPIED').length;

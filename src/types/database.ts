@@ -87,6 +87,8 @@ export interface Payment {
   payment_method: PaymentMethod | null;
   received_by: PaymentReceiver;
   payment_type?: PaymentType;
+  installment_number?: number | null;
+  total_target_amount?: number | null;
   transaction_ref?: string | null;
   notes?: string | null;
   created_at?: string;

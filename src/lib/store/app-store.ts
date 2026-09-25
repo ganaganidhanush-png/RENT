@@ -84,12 +84,23 @@ export function getLocalTenants(): Tenant[] {
 export function syncLocalRoomOccupancy(roomId: string, currentTenants?: Tenant[]) {
   const tenants = currentTenants || getLocalTenants();
   const rooms = getLocalRooms();
-  const targetRoom = rooms.find((r) => r.id === roomId);
+  const targetRoom = rooms.find(
+    (r) =>
+      r.id === roomId ||
+      r.room_number.toUpperCase() === String(roomId).toUpperCase() ||
+      r.id.toLowerCase() === String(roomId).toLowerCase()
+  );
   if (!targetRoom) return;
 
   // Active occupants (ACTIVE or NOTICE_PERIOD are still occupying beds)
   const activeTenants = tenants.filter(
-    (t) => t.room_id === roomId && (t.status === 'ACTIVE' || t.status === 'NOTICE_PERIOD')
+    (t) =>
+      (t.status === 'ACTIVE' || t.status === 'NOTICE_PERIOD') &&
+      (t.room_id === targetRoom.id ||
+       t.room_id === targetRoom.room_number ||
+       (t.room && t.room.room_number === targetRoom.room_number) ||
+       String(t.room_id).toLowerCase() === targetRoom.id.toLowerCase() ||
+       String(t.room_id).toUpperCase() === targetRoom.room_number.toUpperCase())
   );
 
   let totalOccupants = 0;
@@ -105,11 +116,110 @@ export function syncLocalRoomOccupancy(roomId: string, currentTenants?: Tenant[]
   const newStatus = totalOccupants === 0 ? 'VACANT' : 'OCCUPIED';
   const canSomeoneGetIn = totalOccupants < capacity;
 
-  saveLocalRoom({
+  const updatedRoom: Room = {
     ...targetRoom,
     status: newStatus,
     current_occupancy: totalOccupants,
     can_someone_get_in: canSomeoneGetIn,
+    updated_at: new Date().toISOString(),
+  };
+
+  saveLocalRoom(updatedRoom);
+
+  // Sync to Supabase in the background so remote database stays 100% updated
+  if (typeof window !== 'undefined') {
+    import('@/lib/supabase/client')
+      .then(({ createClient }) => {
+        const supabase = createClient();
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetRoom.id);
+        const query = supabase.from('rooms').update({
+          status: newStatus,
+          current_occupancy: totalOccupants,
+          can_someone_get_in: canSomeoneGetIn,
+          updated_at: new Date().toISOString(),
+        });
+        if (isUuid) {
+          query.eq('id', targetRoom.id).then();
+        } else {
+          query.eq('room_number', targetRoom.room_number).then();
+        }
+      })
+      .catch((err) => {
+        console.warn('Room occupancy remote sync note:', err);
+      });
+  }
+}
+
+export function syncAllRoomsWithTenants(currentTenants?: Tenant[], currentRooms?: Room[]) {
+  const tenants = currentTenants || getLocalTenants();
+  const rooms = currentRooms || getLocalRooms();
+  for (const room of rooms) {
+    syncLocalRoomOccupancy(room.id, tenants);
+  }
+}
+
+export function mergeTenants(local: Tenant[], remote: Tenant[]): Tenant[] {
+  const map = new Map<string, Tenant>();
+  for (const t of remote) {
+    map.set(t.id, t);
+  }
+  for (const t of local) {
+    const existing = map.get(t.id);
+    if (!existing) {
+      map.set(t.id, t);
+    } else {
+      const isLocalNewer = !existing.updated_at || (t.updated_at && t.updated_at >= existing.updated_at);
+      if (isLocalNewer) {
+        map.set(t.id, { ...existing, ...t });
+      }
+    }
+  }
+  return Array.from(map.values());
+}
+
+export function mergeRooms(local: Room[], remote: Room[], tenants?: Tenant[]): Room[] {
+  const map = new Map<string, Room>();
+  for (const r of remote) {
+    map.set(r.room_number, r);
+  }
+  for (const r of local) {
+    const existing = map.get(r.room_number);
+    if (!existing) {
+      map.set(r.room_number, r);
+    } else {
+      map.set(r.room_number, { ...existing, ...r });
+    }
+  }
+  const merged = Array.from(map.values());
+  const activeTenants = tenants || getLocalTenants();
+
+  return merged.map((room) => {
+    const matchingTenants = activeTenants.filter(
+      (t) =>
+        (t.status === 'ACTIVE' || t.status === 'NOTICE_PERIOD') &&
+        (t.room_id === room.id ||
+         t.room_id === room.room_number ||
+         (t.room && t.room.room_number === room.room_number) ||
+         String(t.room_id).toLowerCase() === room.id.toLowerCase() ||
+         String(t.room_id).toUpperCase() === room.room_number.toUpperCase())
+    );
+    let totalOccupants = 0;
+    for (const t of matchingTenants) {
+      if (t.tenant_type === 'BACHELORS' && t.occupants && t.occupants.length > 0) {
+        totalOccupants += t.occupants.length;
+      } else {
+        totalOccupants += t.family_members_count || 1;
+      }
+    }
+    const capacity = room.capacity || 2;
+    const status = totalOccupants === 0 ? 'VACANT' : 'OCCUPIED';
+    const canSomeoneGetIn = totalOccupants < capacity;
+    return {
+      ...room,
+      status,
+      current_occupancy: totalOccupants,
+      can_someone_get_in: canSomeoneGetIn,
+    };
   });
 }
 
@@ -138,6 +248,9 @@ export function saveLocalTenant(tenant: Tenant): Tenant[] {
     syncLocalRoomOccupancy(oldRoomId, newTenants);
   }
 
+  // Also comprehensively ensure all rooms reflect current tenancy
+  syncAllRoomsWithTenants(newTenants);
+
   notifyDataChange();
   return newTenants;
 }
@@ -154,6 +267,7 @@ export function deleteLocalTenant(tenantId: string): Tenant[] {
   if (toDelete?.room_id) {
     syncLocalRoomOccupancy(toDelete.room_id, newTenants);
   }
+  syncAllRoomsWithTenants(newTenants);
 
   notifyDataChange();
   return newTenants;
@@ -176,10 +290,16 @@ export function saveLocalPayment(payment: Payment): Payment[] {
   const targetMonth = (payment.billing_period_month || '').slice(0, 7);
   const targetType = payment.payment_type || 'RENT';
   const index = payments.findIndex((p) => {
+    // 1. Direct match by ID
     if (p.id === payment.id) return true;
+    
+    // 2. Only replace if the existing record was an unfulfilled placeholder with zero payment
     const pMonth = (p.billing_period_month || '').slice(0, 7);
     const pType = p.payment_type || 'RENT';
+    const isUnpaidPlaceholder = p.amount_paid === 0 && p.payment_status === 'PENDING';
+    
     return Boolean(
+      isUnpaidPlaceholder &&
       p.tenant_id &&
       p.tenant_id === payment.tenant_id &&
       targetMonth &&

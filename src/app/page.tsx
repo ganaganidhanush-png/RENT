@@ -47,6 +47,35 @@ export default async function DashboardPage() {
     if (dbTenants && dbTenants.length > 0) {
       allTenants = dbTenants;
       totalRentExpected = dbTenants.reduce((acc, t) => acc + Number(t.monthly_rent || 0), 0);
+
+      // Dynamically re-evaluate room occupancy from active tenants so server render is always accurate
+      rooms = rooms.map((r) => {
+        const matching = dbTenants.filter(
+          (t) =>
+            t.room_id === r.id ||
+            t.room_id === r.room_number ||
+            (t.room && t.room.room_number === r.room_number) ||
+            String(t.room_id).toLowerCase() === r.id.toLowerCase() ||
+            String(t.room_id).toUpperCase() === r.room_number.toUpperCase()
+        );
+        let occ = 0;
+        for (const t of matching) {
+          if (t.tenant_type === 'BACHELORS' && t.occupants && t.occupants.length > 0) {
+            occ += t.occupants.length;
+          } else {
+            occ += t.family_members_count || 1;
+          }
+        }
+        const cap = r.capacity || 2;
+        const status = occ === 0 ? 'VACANT' : 'OCCUPIED';
+        return {
+          ...r,
+          status,
+          current_occupancy: occ,
+          can_someone_get_in: occ < cap,
+        };
+      });
+      occupiedRooms = rooms.filter((r) => r.status === 'OCCUPIED').length;
     } else {
       totalRentExpected = rooms.reduce((acc, r) => acc + (r.status === 'OCCUPIED' ? Number(r.base_rent || 0) : 0), 0);
     }

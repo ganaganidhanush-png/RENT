@@ -29,13 +29,12 @@ export default function PaymentsPage() {
     for (const lp of localList) {
       const alreadyExists = merged.some((m) => {
         if (m.id === lp.id) return true;
+        // If local had a temporary pay- timestamp id, check if remote already has the exact same transaction
         const sameTenant = m.tenant_id === lp.tenant_id;
-        const sameRoom = m.room_id === lp.room_id;
-        const mMonth = (m.billing_period_month || '').slice(0, 7);
-        const lpMonth = (lp.billing_period_month || '').slice(0, 7);
-        const mType = m.payment_type || 'RENT';
-        const lpType = lp.payment_type || 'RENT';
-        return sameTenant && sameRoom && mMonth === lpMonth && mMonth !== '' && mType === lpType;
+        const sameAmount = Number(m.amount_paid) === Number(lp.amount_paid);
+        const sameDate = (m.payment_date || '').slice(0, 10) === (lp.payment_date || '').slice(0, 10);
+        const sameType = (m.payment_type || 'RENT') === (lp.payment_type || 'RENT');
+        return sameTenant && sameAmount && sameDate && sameType && m.id !== lp.id && !m.id.startsWith('pay-');
       });
       if (!alreadyExists) {
         merged.push(lp);

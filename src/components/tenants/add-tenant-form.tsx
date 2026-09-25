@@ -41,6 +41,7 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
     leaseEndDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
     monthlyRent: String(DEFAULT_ROOMS[0].base_rent),
     securityDeposit: String(DEFAULT_ROOMS[0].security_deposit),
+    advancePaidToday: String(DEFAULT_ROOMS[0].security_deposit),
     rentDueDay: 5,
     familyMembersCount: 2,
     primaryOccupation: '',
@@ -80,6 +81,7 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
             roomId: activeRoom.id,
             monthlyRent: String(activeRoom.base_rent),
             securityDeposit: String(activeRoom.security_deposit),
+            advancePaidToday: String(activeRoom.security_deposit),
           }));
         } else {
           // Fallback to local rooms (G1, 2A, 2B, 3A, 3B, P1)
@@ -92,6 +94,7 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
               roomId: activeRoom.id,
               monthlyRent: String(activeRoom.base_rent),
               securityDeposit: String(activeRoom.security_deposit),
+              advancePaidToday: String(activeRoom.security_deposit),
             }));
           }
         }
@@ -111,6 +114,7 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
       roomId,
       monthlyRent: selected ? String(selected.base_rent) : prev.monthlyRent,
       securityDeposit: selected ? String(selected.security_deposit) : prev.securityDeposit,
+      advancePaidToday: selected ? String(selected.security_deposit) : prev.advancePaidToday,
     }));
   };
 
@@ -259,146 +263,221 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
             return v.toString(16);
           });
 
+      const advancePaidTodayNum = Math.max(0, Number(formData.advancePaidToday) || 0);
+      const totalDepositTarget = Number(formData.securityDeposit) || 0;
+
       // Build structured tenant object
-      const newTenant: Tenant = {
-        id: generatedId,
-        room_id: formData.roomId,
-        full_name: primaryFullName,
-        phone: primaryPhone,
-        email: formData.email || null,
-        tenant_type: tenantType,
-        occupants: isBachelors ? occupants : null,
-        family_members_count: isBachelors ? occupants.length : Number(formData.familyMembersCount || 1),
-        primary_occupation: isBachelors ? (occupants[0]?.occupation || null) : (formData.primaryOccupation || null),
-        college_or_company: isBachelors ? (occupants[0]?.organization || null) : null,
-        emergency_contact_name: formData.emergencyName,
-        emergency_contact_phone: formData.emergencyPhone,
-        emergency_contact_relation: formData.emergencyRelation,
-        move_in_date: formData.moveInDate,
-        lease_end_date: formData.leaseEndDate,
-        monthly_rent: Number(formData.monthlyRent),
-        security_deposit_paid: Number(formData.securityDeposit),
-        rent_due_day: Number(formData.rentDueDay || 5),
-        status: 'ACTIVE',
-        room: selectedRoom,
-        created_at: new Date().toISOString(),
-      };
-
-      // 1. Save in local app store immediately (so it instantly shows on UI)
-      saveLocalTenant(newTenant);
-
-      // Auto-create initial billing payment entry for the tenant
-      const now = new Date();
-      const currentMonthIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-      const currentMonthName = now.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
-      const initialPayment: Payment = {
-        id: `pay-${Date.now()}`,
-        tenant_id: generatedId,
-        room_id: formData.roomId,
-        billing_period_month: currentMonthIso,
-        billing_month: currentMonthName,
-        amount_due: Number(formData.monthlyRent),
-        amount_paid: 0,
-        amount_pending: Number(formData.monthlyRent),
-        payment_status: 'PENDING',
-        payment_date: null,
-        payment_method: 'UPI',
-        received_by: 'LANDLORD',
-        created_at: new Date().toISOString(),
-        tenant: newTenant,
-        room: selectedRoom,
-      };
-      saveLocalPayment(initialPayment);
-
-      // Record uploaded documents in local store
-      if (aadharFile) {
-        const aadharDoc: DocumentRecord = {
-          id: `doc-aadhar-${Date.now()}`,
-          tenant_id: generatedId,
+        const newTenant: Tenant = {
+          id: generatedId,
           room_id: formData.roomId,
-          doc_type: 'AADHAR_CARD',
-          storage_path: `tenants/${generatedId}/aadhar_${aadharFile.name}`,
-          file_name: aadharFile.name,
-          mime_type: aadharFile.type || 'application/pdf',
-          file_size_bytes: aadharFile.size,
-          created_at: new Date().toISOString(),
-          tenant: newTenant,
+          full_name: primaryFullName,
+          phone: primaryPhone,
+          email: formData.email || null,
+          tenant_type: tenantType,
+          occupants: isBachelors ? occupants : null,
+          family_members_count: isBachelors ? occupants.length : Number(formData.familyMembersCount || 1),
+          primary_occupation: isBachelors ? (occupants[0]?.occupation || null) : (formData.primaryOccupation || null),
+          college_or_company: isBachelors ? (occupants[0]?.organization || null) : null,
+          emergency_contact_name: formData.emergencyName,
+          emergency_contact_phone: formData.emergencyPhone,
+          emergency_contact_relation: formData.emergencyRelation,
+          move_in_date: formData.moveInDate,
+          lease_end_date: formData.leaseEndDate,
+          monthly_rent: Number(formData.monthlyRent),
+          security_deposit_paid: advancePaidTodayNum,
+          rent_due_day: Number(formData.rentDueDay || 5),
+          status: 'ACTIVE',
           room: selectedRoom,
-        };
-        saveLocalDocument(aadharDoc);
-      }
-
-      if (agreementFile) {
-        const agreementDoc: DocumentRecord = {
-          id: `doc-agreement-${Date.now()}`,
-          tenant_id: generatedId,
-          room_id: formData.roomId,
-          doc_type: 'RENTAL_AGREEMENT',
-          storage_path: `tenants/${generatedId}/agreement_${agreementFile.name}`,
-          file_name: agreementFile.name,
-          mime_type: agreementFile.type || 'application/pdf',
-          file_size_bytes: agreementFile.size,
           created_at: new Date().toISOString(),
-          tenant: newTenant,
-          room: selectedRoom,
         };
-        saveLocalDocument(agreementDoc);
-      }
 
-      if (tenantPhoto) {
-        const photoDoc: DocumentRecord = {
-          id: `doc-photo-${Date.now()}`,
-          tenant_id: generatedId,
-          room_id: formData.roomId,
-          doc_type: 'TENANT_PHOTO',
-          storage_path: `tenants/${generatedId}/photo_${tenantPhoto.name}`,
-          file_name: tenantPhoto.name,
-          mime_type: tenantPhoto.type || 'image/jpeg',
-          file_size_bytes: tenantPhoto.size,
-          created_at: new Date().toISOString(),
-          tenant: newTenant,
-          room: selectedRoom,
-        };
-        saveLocalDocument(photoDoc);
-      }
+        // 1. Save in local app store immediately (so it instantly shows on UI and auto-syncs all room occupancies)
+        saveLocalTenant(newTenant);
 
-      // 2. Try inserting into Supabase
-      try {
-        const supabase = createClient();
-        const { data: tenant, error: tenantError } = await supabase
-          .from('tenants')
-          .insert({
-            id: generatedId,
-            room_id: newTenant.room_id,
-            full_name: newTenant.full_name,
-            phone: newTenant.phone,
-            email: newTenant.email,
-            tenant_type: newTenant.tenant_type,
-            occupants: newTenant.occupants,
-            family_members_count: newTenant.family_members_count,
-            primary_occupation: newTenant.primary_occupation,
-            college_or_company: newTenant.college_or_company,
-            emergency_contact_name: newTenant.emergency_contact_name,
-            emergency_contact_phone: newTenant.emergency_contact_phone,
-            emergency_contact_relation: newTenant.emergency_contact_relation,
-            move_in_date: newTenant.move_in_date,
-            lease_end_date: newTenant.lease_end_date,
-            monthly_rent: newTenant.monthly_rent,
-            security_deposit_paid: newTenant.security_deposit_paid,
-            rent_due_day: newTenant.rent_due_day || 5,
-            status: 'ACTIVE',
-          })
-          .select()
-          .single();
+        const now = new Date();
+        const currentMonthIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+        const currentMonthName = now.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
 
-        if (!tenantError && tenant) {
-          if (aadharFile) await uploadToVault(aadharFile, tenant.id, 'AADHAR_CARD');
-          if (agreementFile) await uploadToVault(agreementFile, tenant.id, 'RENTAL_AGREEMENT');
-          if (tenantPhoto) await uploadToVault(tenantPhoto, tenant.id, 'TENANT_PHOTO');
+        // If an upfront advance or token slice was paid today, record Slice #1
+        let depositPayment: Payment | null = null;
+        if (advancePaidTodayNum > 0) {
+          const isFullDeposit = advancePaidTodayNum >= totalDepositTarget;
+          depositPayment = {
+            id: `pay-advance-${Date.now()}`,
+            tenant_id: generatedId,
+            room_id: formData.roomId,
+            billing_period_month: currentMonthIso,
+            billing_month: currentMonthName,
+            amount_due: totalDepositTarget,
+            amount_paid: advancePaidTodayNum,
+            amount_pending: Math.max(0, totalDepositTarget - advancePaidTodayNum),
+            payment_status: isFullDeposit ? 'PAID' : 'PARTIAL',
+            payment_date: new Date().toISOString().split('T')[0],
+            payment_method: 'UPI',
+            payment_type: 'SECURITY_DEPOSIT',
+            installment_number: 1,
+            total_target_amount: totalDepositTarget,
+            received_by: 'LANDLORD',
+            notes: isFullDeposit
+              ? `Full upfront advance of ₹${advancePaidTodayNum.toLocaleString('en-IN')} paid at move-in.`
+              : `Advance Slice #1 (token advance) of ₹${advancePaidTodayNum.toLocaleString('en-IN')} paid. Remaining ₹${Math.max(0, totalDepositTarget - advancePaidTodayNum).toLocaleString('en-IN')} pending in slices.`,
+            created_at: new Date().toISOString(),
+            tenant: newTenant,
+            room: selectedRoom,
+          };
+          saveLocalPayment(depositPayment);
         }
-      } catch (dbErr) {
-        console.warn('Supabase tenant direct insert note:', dbErr);
-      }
+
+        // Auto-create initial billing payment entry for the tenant's upcoming monthly rent
+        const initialPayment: Payment = {
+          id: `pay-${Date.now() + 1}`,
+          tenant_id: generatedId,
+          room_id: formData.roomId,
+          billing_period_month: currentMonthIso,
+          billing_month: currentMonthName,
+          amount_due: Number(formData.monthlyRent),
+          amount_paid: 0,
+          amount_pending: Number(formData.monthlyRent),
+          payment_status: 'PENDING',
+          payment_date: null,
+          payment_method: 'UPI',
+          payment_type: 'RENT',
+          received_by: 'LANDLORD',
+          created_at: new Date().toISOString(),
+          tenant: newTenant,
+          room: selectedRoom,
+        };
+        saveLocalPayment(initialPayment);
+
+        // Record uploaded documents in local store
+        if (aadharFile) {
+          const aadharDoc: DocumentRecord = {
+            id: `doc-aadhar-${Date.now()}`,
+            tenant_id: generatedId,
+            room_id: formData.roomId,
+            doc_type: 'AADHAR_CARD',
+            storage_path: `tenants/${generatedId}/aadhar_${aadharFile.name}`,
+            file_name: aadharFile.name,
+            mime_type: aadharFile.type || 'application/pdf',
+            file_size_bytes: aadharFile.size,
+            created_at: new Date().toISOString(),
+            tenant: newTenant,
+            room: selectedRoom,
+          };
+          saveLocalDocument(aadharDoc);
+        }
+
+        if (agreementFile) {
+          const agreementDoc: DocumentRecord = {
+            id: `doc-agreement-${Date.now()}`,
+            tenant_id: generatedId,
+            room_id: formData.roomId,
+            doc_type: 'RENTAL_AGREEMENT',
+            storage_path: `tenants/${generatedId}/agreement_${agreementFile.name}`,
+            file_name: agreementFile.name,
+            mime_type: agreementFile.type || 'application/pdf',
+            file_size_bytes: agreementFile.size,
+            created_at: new Date().toISOString(),
+            tenant: newTenant,
+            room: selectedRoom,
+          };
+          saveLocalDocument(agreementDoc);
+        }
+
+        if (tenantPhoto) {
+          const photoDoc: DocumentRecord = {
+            id: `doc-photo-${Date.now()}`,
+            tenant_id: generatedId,
+            room_id: formData.roomId,
+            doc_type: 'TENANT_PHOTO',
+            storage_path: `tenants/${generatedId}/photo_${tenantPhoto.name}`,
+            file_name: tenantPhoto.name,
+            mime_type: tenantPhoto.type || 'image/jpeg',
+            file_size_bytes: tenantPhoto.size,
+            created_at: new Date().toISOString(),
+            tenant: newTenant,
+            room: selectedRoom,
+          };
+          saveLocalDocument(photoDoc);
+        }
+
+        // 2. Sync to Supabase
+        try {
+          const supabase = createClient();
+          const { data: tenant, error: tenantError } = await supabase
+            .from('tenants')
+            .insert({
+              id: generatedId,
+              room_id: newTenant.room_id,
+              full_name: newTenant.full_name,
+              phone: newTenant.phone,
+              email: newTenant.email,
+              tenant_type: newTenant.tenant_type,
+              occupants: newTenant.occupants,
+              family_members_count: newTenant.family_members_count,
+              primary_occupation: newTenant.primary_occupation,
+              college_or_company: newTenant.college_or_company,
+              emergency_contact_name: newTenant.emergency_contact_name,
+              emergency_contact_phone: newTenant.emergency_contact_phone,
+              emergency_contact_relation: newTenant.emergency_contact_relation,
+              move_in_date: newTenant.move_in_date,
+              lease_end_date: newTenant.lease_end_date,
+              monthly_rent: newTenant.monthly_rent,
+              security_deposit_paid: newTenant.security_deposit_paid,
+              rent_due_day: newTenant.rent_due_day || 5,
+              status: 'ACTIVE',
+            })
+            .select()
+            .single();
+
+          if (!tenantError && tenant) {
+            if (aadharFile) await uploadToVault(aadharFile, tenant.id, 'AADHAR_CARD');
+            if (agreementFile) await uploadToVault(agreementFile, tenant.id, 'RENTAL_AGREEMENT');
+            if (tenantPhoto) await uploadToVault(tenantPhoto, tenant.id, 'TENANT_PHOTO');
+          }
+
+          // If advance slice was recorded, sync payment to Supabase
+          if (depositPayment) {
+            await supabase.from('payments').insert({
+              id: depositPayment.id,
+              tenant_id: generatedId,
+              room_id: formData.roomId,
+              billing_period_month: currentMonthIso,
+              billing_month: currentMonthName,
+              amount_due: depositPayment.amount_due,
+              amount_paid: depositPayment.amount_paid,
+              amount_pending: depositPayment.amount_pending,
+              payment_status: depositPayment.payment_status,
+              payment_date: depositPayment.payment_date,
+              payment_method: depositPayment.payment_method,
+              payment_type: 'SECURITY_DEPOSIT',
+              installment_number: 1,
+              total_target_amount: depositPayment.total_target_amount,
+              received_by: 'LANDLORD',
+              notes: depositPayment.notes,
+            });
+          }
+
+          // Smartly update the room status and occupancy in Supabase
+          if (selectedRoom) {
+            const totalOccupants = isBachelors ? occupants.length : Number(formData.familyMembersCount || 1);
+            const capacity = selectedRoom.capacity || 2;
+            const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(selectedRoom.id);
+            const roomQuery = supabase.from('rooms').update({
+              status: 'OCCUPIED',
+              current_occupancy: totalOccupants,
+              can_someone_get_in: totalOccupants < capacity,
+              updated_at: new Date().toISOString(),
+            });
+            if (isUuid) {
+              await roomQuery.eq('id', selectedRoom.id);
+            } else {
+              await roomQuery.eq('room_number', selectedRoom.room_number);
+            }
+          }
+        } catch (dbErr) {
+          console.warn('Supabase tenant direct insert note:', dbErr);
+        }
 
       setStatusMessage({ 
         type: 'success', 
@@ -559,7 +638,7 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
             <div>
               <label className="block text-xs font-bold text-slate-800 mb-1.5 flex items-center gap-1">
                 <IndianRupee className="w-3.5 h-3.5 text-indigo-600" />
-                Security Deposit (₹) *
+                Agreed Security Deposit Target (₹) *
               </label>
               <input
                 type="number"
@@ -568,6 +647,101 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
                 required
                 className="w-full text-xs font-bold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 focus:outline-none"
               />
+            </div>
+          </div>
+
+          {/* Smart Upfront Advance / Slices Collection Section */}
+          <div className="p-4 rounded-xl border-2 border-indigo-200 bg-indigo-50/50 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <span className="text-xs font-black text-indigo-950 uppercase tracking-wider flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-indigo-600" />
+                  Smart Advance Collection (Initial Slice or Token)
+                </span>
+                <p className="text-[11px] text-slate-600 mt-0.5">
+                  Does the tenant pay the full advance today, or a token slice now and the rest in smaller slices over time?
+                </p>
+              </div>
+
+              {(() => {
+                const depositTarget = Number(formData.securityDeposit) || 0;
+                const advanceToday = Number(formData.advancePaidToday) || 0;
+                if (advanceToday >= depositTarget && depositTarget > 0) {
+                  return (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2.5 py-1 rounded-full whitespace-nowrap">
+                      🟢 Full Advance Paid (₹{advanceToday.toLocaleString('en-IN')})
+                    </span>
+                  );
+                } else if (advanceToday > 0) {
+                  return (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-2.5 py-1 rounded-full whitespace-nowrap">
+                      🟡 Slice #1: ₹{advanceToday.toLocaleString('en-IN')} (₹{Math.max(0, depositTarget - advanceToday).toLocaleString('en-IN')} due in slices)
+                    </span>
+                  );
+                } else {
+                  return (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-700 bg-slate-200 border border-slate-300 px-2.5 py-1 rounded-full whitespace-nowrap">
+                      ⚪ Pay in Slices Later (₹0 Today)
+                    </span>
+                  );
+                }
+              })()}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
+              <div>
+                <label className="block text-xs font-bold text-slate-800 mb-1.5 flex items-center gap-1">
+                  <IndianRupee className="w-3.5 h-3.5 text-indigo-600" />
+                  Advance Amount Paid Today (₹)
+                </label>
+                <input
+                  type="number"
+                  value={formData.advancePaidToday}
+                  onChange={(e) => setFormData({ ...formData, advancePaidToday: e.target.value })}
+                  placeholder="e.g. 5000"
+                  className="w-full text-xs font-bold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 mb-1.5">
+                  ⚡ Quick Slice Presets:
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, advancePaidToday: formData.securityDeposit })}
+                    className="px-2.5 py-1 text-xs font-bold bg-white text-indigo-700 border border-indigo-300 hover:bg-indigo-100 rounded-lg transition-colors cursor-pointer"
+                  >
+                    ⚡ Full (₹{Number(formData.securityDeposit || 0).toLocaleString('en-IN')})
+                  </button>
+                  {Number(formData.securityDeposit) > 5000 && (
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, advancePaidToday: '5000' })}
+                      className="px-2.5 py-1 text-xs font-bold bg-white text-slate-700 border border-slate-300 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                    >
+                      Token: ₹5,000
+                    </button>
+                  )}
+                  {Number(formData.securityDeposit) > 10000 && (
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, advancePaidToday: '10000' })}
+                      className="px-2.5 py-1 text-xs font-bold bg-white text-slate-700 border border-slate-300 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                    >
+                      Slice: ₹10,000
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, advancePaidToday: '0' })}
+                    className="px-2.5 py-1 text-xs font-bold bg-white text-rose-700 border border-rose-300 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                  >
+                    Pay Later (₹0)
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
 

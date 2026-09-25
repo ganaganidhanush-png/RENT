@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { Room, Tenant, Payment } from '@/types/database';
 import { DEFAULT_ROOMS } from '@/lib/constants/rooms';
-import { getLocalRooms, getLocalTenants } from '@/lib/store/app-store';
+import { getLocalRooms, getLocalTenants, mergeTenants, mergeRooms } from '@/lib/store/app-store';
 import { createClient } from '@/lib/supabase/client';
 import EditRoomModal from '@/components/rooms/edit-room-modal';
 import EditTenantModal from '@/components/tenants/edit-tenant-modal';
@@ -30,8 +30,10 @@ export default function RoomsPage() {
   useEffect(() => {
     async function loadData() {
       const localRooms = getLocalRooms();
-      setRooms(localRooms);
-      setTenants(getLocalTenants());
+      const localTenants = getLocalTenants();
+      const initialRooms = mergeRooms(localRooms, [], localTenants);
+      setRooms(initialRooms);
+      setTenants(localTenants);
 
       try {
         const supabase = createClient();
@@ -40,15 +42,10 @@ export default function RoomsPage() {
           supabase.from('tenants').select('*, room:rooms(*)').order('created_at', { ascending: false })
         ]);
 
-        if (roomsData && roomsData.length > 0) {
-          setRooms(roomsData);
-        } else if (localRooms && localRooms.length > 0) {
-          setRooms(localRooms);
-        }
-
-        if (tenantsData && tenantsData.length > 0) {
-          setTenants(tenantsData);
-        }
+        const mergedT = mergeTenants(localTenants, tenantsData || []);
+        const mergedR = mergeRooms(localRooms, roomsData || [], mergedT);
+        setTenants(mergedT);
+        setRooms(mergedR);
       } catch (err) {
         console.warn('Rooms/Tenants fetch note:', err);
       }
@@ -57,8 +54,10 @@ export default function RoomsPage() {
     loadData();
 
     const handleDataChange = () => {
-      setRooms(getLocalRooms());
-      setTenants(getLocalTenants());
+      const lt = getLocalTenants();
+      const lr = getLocalRooms();
+      setTenants(lt);
+      setRooms(mergeRooms(lr, [], lt));
     };
 
     window.addEventListener('rentvault_data_updated', handleDataChange);

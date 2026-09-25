@@ -1,12 +1,13 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   X, IndianRupee, User, Building2, Calendar, 
-  CheckCircle2, Save, CreditCard, Tag, FileText, UserCheck
+  CheckCircle2, Save, CreditCard, Tag, FileText, UserCheck,
+  Sparkles, Layers
 } from 'lucide-react';
 import { Payment, Tenant, Room, PaymentMethod, PaymentStatus, PaymentReceiver, PaymentType } from '@/types/database';
-import { getLocalTenants, getLocalRooms, saveLocalPayment, getLandlordProfile } from '@/lib/store/app-store';
+import { getLocalTenants, getLocalRooms, getLocalPayments, saveLocalPayment, getLandlordProfile } from '@/lib/store/app-store';
 import { createClient } from '@/lib/supabase/client';
 
 const CATEGORY_OPTIONS: { value: PaymentType; label: string; icon: string; desc: string }[] = [
@@ -21,10 +22,26 @@ const QUICK_NOTE_TAGS = [
   'Monthly Rent',
   'Maintenance (Water/Lift)',
   'Move-in Advance Deposit',
+  'Advance Token (Slice 1)',
+  'Advance Installment (Slice 2)',
+  'Advance Final Settlement',
   'EB Meter Bill',
   'Full Settlement',
   'Partial Payment (Balance Pending)',
 ];
+
+function generateSlicePresets(remaining: number, total: number): number[] {
+  if (remaining <= 0) return [total];
+  const presets: number[] = [remaining];
+  
+  if (remaining > 10000) presets.push(10000);
+  if (remaining > 5000 && !presets.includes(5000)) presets.push(5000);
+  if (remaining > 2000 && !presets.includes(2000) && presets.length < 4) presets.push(2000);
+  const half = Math.round(remaining / 2);
+  if (half > 1000 && !presets.includes(half) && presets.length < 4) presets.push(half);
+  
+  return Array.from(new Set(presets)).sort((a, b) => b - a);
+}
 
 interface RecordPaymentModalProps {
   payment?: Payment | null;
@@ -49,6 +66,13 @@ export default function RecordPaymentModal({
 }: RecordPaymentModalProps) {
   const [tenants] = useState<Tenant[]>(() => (propTenants && propTenants.length > 0 ? propTenants : getLocalTenants()));
   const [rooms] = useState<Room[]>(() => (propRooms && propRooms.length > 0 ? propRooms : getLocalRooms()));
+  const [allPayments, setAllPayments] = useState<Payment[]>(() => getLocalPayments());
+
+  useEffect(() => {
+    if (isOpen) {
+      setAllPayments(getLocalPayments());
+    }
+  }, [isOpen]);
 
   const defaultYearMonth = () => {
     const now = new Date();
@@ -90,35 +114,103 @@ export default function RecordPaymentModal({
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
 
+  const activeTenant = tenants.find((t) => t.id === selectedTenantId);
+  const activeRoom = rooms.find((r) => r.id === selectedRoomId);
+
+  // 1. Advance / Security Deposit Smart Slices Calculations
+  const targetAdvanceTotal = Number(activeTenant?.security_deposit_paid || activeRoom?.security_deposit || 20000);
+  const pastAdvancePayments = allPayments.filter((p) =>
+    p.tenant_id === selectedTenantId &&
+    p.payment_type === 'SECURITY_DEPOSIT' &&
+    Number(p.amount_paid) > 0 &&
+    p.id !== payment?.id
+  );
+  const totalAdvanceCollectedSoFar = pastAdvancePayments.reduce(
+    (acc, p) => acc + Number(p.amount_paid || 0),
+    0
+  );
+  const remainingAdvanceToCollect = Math.max(0, targetAdvanceTotal - totalAdvanceCollectedSoFar);
+  const nextAdvanceSliceIndex = pastAdvancePayments.length + 1;
+
+  // 2. Rent Smart Slices Calculations
+  const targetRentTotal = Number(activeTenant?.monthly_rent || activeRoom?.base_rent || 0);
+  const pastRentPayments = allPayments.filter((p) =>
+    p.tenant_id === selectedTenantId &&
+    p.payment_type === 'RENT' &&
+    (p.billing_period_month || '').slice(0, 7) === billingMonthYear &&
+    Number(p.amount_paid) > 0 &&
+    p.id !== payment?.id
+  );
+  const totalRentCollectedSoFar = pastRentPayments.reduce(
+    (acc, p) => acc + Number(p.amount_paid || 0),
+    0
+  );
+  const remainingRentToCollect = Math.max(0, targetRentTotal - totalRentCollectedSoFar);
+  const nextRentSliceIndex = pastRentPayments.length + 1;
+
   if (!isOpen) return null;
 
   // Handle switching payment category with intelligent auto-fill
   const handleCategoryChange = (newType: PaymentType) => {
     setPaymentType(newType);
-    const activeTenant = tenants.find((t) => t.id === selectedTenantId);
     
     if (newType === 'RENT') {
-      const rent = activeTenant?.monthly_rent || 0;
-      if (rent > 0) {
-        setAmountDue(String(rent));
-        setAmountPaid(String(rent));
+      const remaining = remainingRentToCollect > 0 ? remainingRentToCollect : targetRentTotal;
+      if (remaining > 0) {
+        setAmountDue(String(remaining));
+        setAmountPaid(String(remaining));
       }
-      if (!notes || notes.includes('Advance') || notes.includes('Maintenance')) {
+      if (totalRentCollectedSoFar > 0) {
+        setNotes(`Monthly Rent - Slice #${nextRentSliceIndex} (Paid so far: ₹${totalRentCollectedSoFar.toLocaleString('en-IN')})`);
+      } else if (!notes || notes.includes('Advance') || notes.includes('Maintenance')) {
         setNotes('Monthly Rent');
       }
     } else if (newType === 'MAINTENANCE') {
-      if (!amountDue || amountDue === String(activeTenant?.monthly_rent)) {
+      if (!amountDue || amountDue === String(targetRentTotal)) {
         setAmountDue('1000');
         setAmountPaid('1000');
       }
       setNotes('Monthly Maintenance (Water & Cleaning)');
     } else if (newType === 'SECURITY_DEPOSIT') {
-      const dep = activeTenant?.security_deposit_paid || (activeTenant?.monthly_rent ? activeTenant.monthly_rent * 2 : 20000);
-      setAmountDue(String(dep));
-      setAmountPaid(String(dep));
-      setNotes('Move-in Security Deposit / Advance Payment');
+      const remaining = remainingAdvanceToCollect > 0 ? remainingAdvanceToCollect : targetAdvanceTotal;
+      setAmountDue(String(remaining));
+      setAmountPaid(String(remaining));
+      if (totalAdvanceCollectedSoFar > 0) {
+        setNotes(`Advance Deposit - Slice #${nextAdvanceSliceIndex} (Agreed: ₹${targetAdvanceTotal.toLocaleString('en-IN')}, Prev Paid: ₹${totalAdvanceCollectedSoFar.toLocaleString('en-IN')})`);
+      } else {
+        setNotes(`Advance / Security Deposit - Slice #1 (Agreed Total: ₹${targetAdvanceTotal.toLocaleString('en-IN')})`);
+      }
     } else if (newType === 'ELECTRICITY') {
       if (!notes) setNotes('EB Electricity Bill (Meter units)');
+    }
+  };
+
+  const handleApplySlice = (
+    sliceAmount: number, 
+    type: 'SECURITY_DEPOSIT' | 'RENT', 
+    totalTarget: number, 
+    alreadyCollected: number, 
+    sliceIndex: number
+  ) => {
+    const remainingBefore = Math.max(0, totalTarget - alreadyCollected);
+    setAmountDue(String(remainingBefore));
+    setAmountPaid(String(sliceAmount));
+
+    const remainingAfter = Math.max(0, remainingBefore - sliceAmount);
+    if (remainingAfter === 0) {
+      setPaymentStatus('PAID');
+      if (type === 'SECURITY_DEPOSIT') {
+        setNotes(`Advance Deposit - Slice #${sliceIndex} (Final Settlement • Fully Paid ₹${totalTarget.toLocaleString('en-IN')})`);
+      } else {
+        setNotes(`Monthly Rent - Slice #${sliceIndex} (Final Settlement • Fully Paid)`);
+      }
+    } else {
+      setPaymentStatus('PARTIAL');
+      if (type === 'SECURITY_DEPOSIT') {
+        setNotes(`Advance Deposit - Slice #${sliceIndex} (Paid ₹${sliceAmount.toLocaleString('en-IN')} • Remaining Balance: ₹${remainingAfter.toLocaleString('en-IN')})`);
+      } else {
+        setNotes(`Monthly Rent - Slice #${sliceIndex} (Paid ₹${sliceAmount.toLocaleString('en-IN')} • Remaining Balance: ₹${remainingAfter.toLocaleString('en-IN')})`);
+      }
     }
   };
 
@@ -131,19 +223,35 @@ export default function RecordPaymentModal({
     });
   };
 
-  // When user changes tenant, automatically fill their room & monthly rent
+  // When user changes tenant, automatically fill their room & monthly rent / advance
   const handleTenantSelect = (tenantId: string) => {
     setSelectedTenantId(tenantId);
     const chosen = tenants.find((t) => t.id === tenantId);
     if (chosen) {
       if (chosen.room_id) setSelectedRoomId(chosen.room_id);
+      
+      const chosenPastAdvance = allPayments.filter((p) =>
+        p.tenant_id === tenantId &&
+        p.payment_type === 'SECURITY_DEPOSIT' &&
+        Number(p.amount_paid) > 0 &&
+        p.id !== payment?.id
+      );
+      const chosenAdvancePaid = chosenPastAdvance.reduce((a, p) => a + Number(p.amount_paid || 0), 0);
+      const chosenTargetAdvance = Number(chosen.security_deposit_paid || 20000);
+      const chosenRemainingAdvance = Math.max(0, chosenTargetAdvance - chosenAdvancePaid);
+
       if (paymentType === 'RENT' && chosen.monthly_rent) {
         setAmountDue(String(chosen.monthly_rent));
         setAmountPaid(String(chosen.monthly_rent));
       } else if (paymentType === 'SECURITY_DEPOSIT') {
-        const dep = chosen.security_deposit_paid || (chosen.monthly_rent ? chosen.monthly_rent * 2 : 20000);
-        setAmountDue(String(dep));
-        setAmountPaid(String(dep));
+        const amt = chosenRemainingAdvance > 0 ? chosenRemainingAdvance : chosenTargetAdvance;
+        setAmountDue(String(amt));
+        setAmountPaid(String(amt));
+        if (chosenAdvancePaid > 0) {
+          setNotes(`Advance Deposit - Slice #${chosenPastAdvance.length + 1} (Agreed: ₹${chosenTargetAdvance.toLocaleString('en-IN')}, Prev Paid: ₹${chosenAdvancePaid.toLocaleString('en-IN')})`);
+        } else {
+          setNotes(`Advance / Security Deposit - Slice #1 (Agreed Total: ₹${chosenTargetAdvance.toLocaleString('en-IN')})`);
+        }
       }
     }
   };
@@ -156,8 +264,16 @@ export default function RecordPaymentModal({
     e.preventDefault();
     setSaving(true);
 
-    const activeTenant = tenants.find((t) => t.id === selectedTenantId);
-    const activeRoom = rooms.find((r) => r.id === selectedRoomId);
+    const isAdvance = paymentType === 'SECURITY_DEPOSIT';
+    const isRent = paymentType === 'RENT';
+
+    const sliceNumber = isAdvance 
+      ? nextAdvanceSliceIndex 
+      : (isRent && totalRentCollectedSoFar > 0 ? nextRentSliceIndex : 1);
+
+    const totalTarget = isAdvance 
+      ? targetAdvanceTotal 
+      : (isRent ? targetRentTotal : dueNum);
 
     // Standardize billing_period_month to YYYY-MM-01 (Postgres DATE requirement)
     const isoBillingPeriod = `${billingMonthYear}-01`;
@@ -170,6 +286,8 @@ export default function RecordPaymentModal({
       tenant_id: selectedTenantId,
       room_id: selectedRoomId,
       payment_type: paymentType,
+      installment_number: sliceNumber,
+      total_target_amount: totalTarget,
       billing_period_month: isoBillingPeriod,
       billing_month: billingDisplay,
       amount_due: dueNum,
@@ -407,6 +525,153 @@ export default function RecordPaymentModal({
               />
             </div>
           </div>
+
+          {/* Smart Advance / Security Deposit Slices Tracker */}
+          {paymentType === 'SECURITY_DEPOSIT' && (
+            <div className="p-4 bg-gradient-to-br from-amber-50 to-orange-50/50 border-2 border-amber-300 rounded-xl space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="p-1 rounded-md bg-amber-600 text-white">
+                    <Sparkles className="w-3.5 h-3.5" />
+                  </span>
+                  <div>
+                    <span className="text-xs font-black text-amber-950 uppercase tracking-wide block">
+                      Smart Advance / Deposit Slices
+                    </span>
+                    <span className="text-[11px] text-amber-800 font-medium">
+                      Tracking installment #{nextAdvanceSliceIndex} for {activeTenant?.full_name || 'Tenant'}
+                    </span>
+                  </div>
+                </div>
+                <span className="text-xs font-black text-amber-950 bg-white px-2.5 py-1 rounded-lg border border-amber-200 shadow-2xs">
+                  Agreed Total: ₹{targetAdvanceTotal.toLocaleString('en-IN')}
+                </span>
+              </div>
+
+              {/* Metrics Grid */}
+              <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                <div className="p-2 bg-white rounded-lg border border-amber-200">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase block">Agreed Target</span>
+                  <span className="font-extrabold text-slate-900 block mt-0.5">₹{targetAdvanceTotal.toLocaleString('en-IN')}</span>
+                </div>
+                <div className="p-2 bg-white rounded-lg border border-amber-200">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase block">Already Paid</span>
+                  <span className="font-extrabold text-emerald-700 block mt-0.5">₹{totalAdvanceCollectedSoFar.toLocaleString('en-IN')}</span>
+                  <span className="text-[9px] text-slate-400 block font-medium mt-0.5">({pastAdvancePayments.length} slice{pastAdvancePayments.length !== 1 ? 's' : ''})</span>
+                </div>
+                <div className="p-2 bg-white rounded-lg border border-amber-200">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase block">Remaining Balance</span>
+                  <span className="font-extrabold text-rose-700 block mt-0.5">₹{remainingAdvanceToCollect.toLocaleString('en-IN')}</span>
+                </div>
+              </div>
+
+              {/* Progress Bar */}
+              <div className="space-y-1">
+                <div className="w-full bg-amber-200/80 rounded-full h-2.5 overflow-hidden flex">
+                  <div 
+                    className="bg-emerald-600 h-full transition-all duration-300"
+                    style={{ width: `${Math.min(100, Math.round((totalAdvanceCollectedSoFar / (targetAdvanceTotal || 1)) * 100))}%` }}
+                  />
+                  {paidNum > 0 && (
+                    <div 
+                      className="bg-amber-500 h-full transition-all duration-300 opacity-90"
+                      style={{ width: `${Math.min(100 - Math.min(100, Math.round((totalAdvanceCollectedSoFar / (targetAdvanceTotal || 1)) * 100)), Math.round((paidNum / (targetAdvanceTotal || 1)) * 100))}%` }}
+                    />
+                  )}
+                </div>
+                <div className="flex justify-between text-[11px] font-bold text-amber-950">
+                  <span>
+                    {Math.round(((totalAdvanceCollectedSoFar + paidNum) / (targetAdvanceTotal || 1)) * 100)}% Total Collected
+                  </span>
+                  <span>
+                    {Math.max(0, targetAdvanceTotal - totalAdvanceCollectedSoFar - paidNum) === 0 ? (
+                      <span className="text-emerald-700">🎉 Advance fully paid after this slice!</span>
+                    ) : (
+                      <span className="text-amber-800">₹{Math.max(0, targetAdvanceTotal - totalAdvanceCollectedSoFar - paidNum).toLocaleString('en-IN')} will remain pending</span>
+                    )}
+                  </span>
+                </div>
+              </div>
+
+              {/* Quick Slices Buttons */}
+              <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-amber-200/60">
+                <span className="text-[11px] font-bold text-amber-900">Choose Slice:</span>
+                {generateSlicePresets(remainingAdvanceToCollect, targetAdvanceTotal).map((sliceAmt) => (
+                  <button
+                    key={sliceAmt}
+                    type="button"
+                    onClick={() => handleApplySlice(sliceAmt, 'SECURITY_DEPOSIT', targetAdvanceTotal, totalAdvanceCollectedSoFar, nextAdvanceSliceIndex)}
+                    className={`px-2.5 py-1 text-xs font-bold rounded-lg border transition-all cursor-pointer ${
+                      paidNum === sliceAmt
+                        ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                        : 'bg-white text-amber-950 border-amber-300 hover:bg-amber-100'
+                    }`}
+                  >
+                    {sliceAmt === remainingAdvanceToCollect ? `⚡ Full Remaining (₹${sliceAmt.toLocaleString('en-IN')})` : `+ ₹${sliceAmt.toLocaleString('en-IN')}`}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Smart Monthly Rent Slices Tracker (shown if partial payments exist for the month) */}
+          {paymentType === 'RENT' && totalRentCollectedSoFar > 0 && (
+            <div className="p-4 bg-gradient-to-br from-indigo-50 to-purple-50/50 border-2 border-indigo-200 rounded-xl space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="p-1 rounded-md bg-indigo-600 text-white">
+                    <Sparkles className="w-3.5 h-3.5" />
+                  </span>
+                  <div>
+                    <span className="text-xs font-black text-indigo-950 uppercase tracking-wide block">
+                      Monthly Rent Slices Tracker
+                    </span>
+                    <span className="text-[11px] text-indigo-800 font-medium">
+                      Slice #{nextRentSliceIndex} for {new Date(`${billingMonthYear}-15`).toLocaleString('en-IN', { month: 'long', year: 'numeric' })}
+                    </span>
+                  </div>
+                </div>
+                <span className="text-xs font-black text-indigo-950 bg-white px-2.5 py-1 rounded-lg border border-indigo-200 shadow-2xs">
+                  Monthly Rent: ₹{targetRentTotal.toLocaleString('en-IN')}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                <div className="p-2 bg-white rounded-lg border border-indigo-100">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase block">Monthly Rent</span>
+                  <span className="font-extrabold text-slate-900 block mt-0.5">₹{targetRentTotal.toLocaleString('en-IN')}</span>
+                </div>
+                <div className="p-2 bg-white rounded-lg border border-indigo-100">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase block">Already Paid</span>
+                  <span className="font-extrabold text-emerald-700 block mt-0.5">₹{totalRentCollectedSoFar.toLocaleString('en-IN')}</span>
+                  <span className="text-[9px] text-slate-400 block font-medium mt-0.5">({pastRentPayments.length} slice{pastRentPayments.length !== 1 ? 's' : ''})</span>
+                </div>
+                <div className="p-2 bg-white rounded-lg border border-indigo-100">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase block">Remaining Rent</span>
+                  <span className="font-extrabold text-rose-700 block mt-0.5">₹{remainingRentToCollect.toLocaleString('en-IN')}</span>
+                </div>
+              </div>
+
+              {/* Quick Slices Buttons */}
+              <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-indigo-100">
+                <span className="text-[11px] font-bold text-indigo-900">Choose Slice:</span>
+                {generateSlicePresets(remainingRentToCollect, targetRentTotal).map((sliceAmt) => (
+                  <button
+                    key={sliceAmt}
+                    type="button"
+                    onClick={() => handleApplySlice(sliceAmt, 'RENT', targetRentTotal, totalRentCollectedSoFar, nextRentSliceIndex)}
+                    className={`px-2.5 py-1 text-xs font-bold rounded-lg border transition-all cursor-pointer ${
+                      paidNum === sliceAmt
+                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                        : 'bg-white text-indigo-950 border-indigo-300 hover:bg-indigo-100'
+                    }`}
+                  >
+                    {sliceAmt === remainingRentToCollect ? `⚡ Full Remaining (₹${sliceAmt.toLocaleString('en-IN')})` : `+ ₹${sliceAmt.toLocaleString('en-IN')}`}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Financial Amounts */}
           <div className="grid grid-cols-3 gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl">
