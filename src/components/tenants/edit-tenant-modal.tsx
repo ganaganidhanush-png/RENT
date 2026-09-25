@@ -75,28 +75,53 @@ function EditTenantModalContent({
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
 
+  const handleMemberCountChange = (count: number) => {
+    const target = Math.max(1, Math.min(10, count));
+    if (tenantType === 'BACHELORS') {
+      const current = [...occupants];
+      if (target > current.length) {
+        const added: BachelorOccupant[] = Array.from(
+          { length: target - current.length },
+          () => ({
+            name: '',
+            phone: '',
+            occupation: 'College Student',
+            organization: '',
+            role_or_course: '',
+            aadhar_number: '',
+          })
+        );
+        setOccupants([...current, ...added]);
+      } else if (target < current.length) {
+        setOccupants(current.slice(0, target));
+      }
+    } else {
+      setFamilyMembersCount(target);
+    }
+  };
+
   const handleAddOccupant = () => {
-    setOccupants([
-      ...occupants,
-      {
-        name: '',
-        phone: '',
-        occupation: 'College Student',
-        organization: '',
-        role_or_course: '',
-        aadhar_number: '',
-      },
-    ]);
+    handleMemberCountChange(occupants.length + 1);
   };
 
   const handleRemoveOccupant = (index: number) => {
-    setOccupants(occupants.filter((_, i) => i !== index));
+    if (occupants.length <= 1) return;
+    const updated = occupants.filter((_, i) => i !== index);
+    setOccupants(updated);
+    if (index === 0 && updated.length > 0) {
+      setFullName(updated[0].name);
+      setPhone(updated[0].phone);
+    }
   };
 
   const handleOccupantChange = (index: number, field: keyof BachelorOccupant, val: string) => {
     const updated = [...occupants];
     updated[index] = { ...updated[index], [field]: val };
     setOccupants(updated);
+    if (index === 0) {
+      if (field === 'name') setFullName(val);
+      if (field === 'phone') setPhone(val);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -104,11 +129,14 @@ function EditTenantModalContent({
     setSaving(true);
 
     const selectedRoom = rooms.find((r) => r.id === roomId);
+    const isBachelors = tenantType === 'BACHELORS';
+    const primaryName = (isBachelors ? (occupants[0]?.name || fullName) : fullName).trim();
+    const primaryPhone = (isBachelors ? (occupants[0]?.phone || phone) : phone).trim();
 
     const updatedTenant: Tenant = {
       ...tenant,
-      full_name: fullName,
-      phone,
+      full_name: primaryName,
+      phone: primaryPhone,
       email: email || null,
       tenant_type: tenantType,
       room_id: roomId || null,
@@ -120,10 +148,10 @@ function EditTenantModalContent({
       emergency_contact_name: emergencyName,
       emergency_contact_phone: emergencyPhone,
       emergency_contact_relation: emergencyRelation,
-      occupants: tenantType === 'BACHELORS' ? occupants : null,
-      family_members_count: tenantType === 'FAMILY' ? familyMembersCount : null,
-      primary_occupation: tenantType === 'FAMILY' ? primaryOccupation : (occupants[0]?.occupation || null),
-      college_or_company: tenantType === 'FAMILY' ? null : (occupants[0]?.organization || null),
+      occupants: isBachelors ? occupants : null,
+      family_members_count: isBachelors ? occupants.length : Number(familyMembersCount),
+      primary_occupation: isBachelors ? (occupants[0]?.occupation || null) : primaryOccupation,
+      college_or_company: isBachelors ? (occupants[0]?.organization || null) : null,
       room: selectedRoom,
       updated_at: new Date().toISOString(),
     };
@@ -287,21 +315,34 @@ function EditTenantModalContent({
           {/* If BACHELORS: Dynamic Individual Details for each bachelor occupant */}
           {tenantType === 'BACHELORS' && (
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 pb-2">
                 <div>
                   <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
                     <GraduationCap className="w-4 h-4 text-indigo-600" />
-                    Each Bachelor&apos;s Details ({occupants.length} Occupants)
+                    Bachelor Roommates ({occupants.length} Members in Room)
                   </h3>
                   <p className="text-[11px] text-slate-600">College / Job information for every person in this room</p>
                 </div>
-                <button
-                  type="button"
-                  onClick={handleAddOccupant}
-                  className="inline-flex items-center gap-1 text-xs font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-lg border border-indigo-200 transition-colors"
-                >
-                  <Plus className="w-3.5 h-3.5" /> Add Occupant
-                </button>
+
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] font-bold text-slate-700">Members:</span>
+                  <div className="inline-flex rounded-lg border border-slate-300 p-0.5 bg-slate-100">
+                    {[1, 2, 3, 4, 5, 6].map((num) => (
+                      <button
+                        key={num}
+                        type="button"
+                        onClick={() => handleMemberCountChange(num)}
+                        className={`px-2 py-0.5 text-xs font-bold rounded transition-all cursor-pointer ${
+                          occupants.length === num
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200'
+                        }`}
+                      >
+                        {num}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               <div className="space-y-3">
@@ -309,13 +350,14 @@ function EditTenantModalContent({
                   <div key={idx} className="p-4 rounded-xl border border-indigo-200 bg-indigo-50/40 space-y-3">
                     <div className="flex items-center justify-between border-b border-indigo-100 pb-2">
                       <span className="text-xs font-bold text-indigo-900">
-                        Occupant #{idx + 1} {occ.name ? `• ${occ.name}` : ''}
+                        {idx === 0 ? 'Member #1 (Lead / Primary Tenant)' : `Member #${idx + 1} (Roommate)`}
+                        {occ.name ? ` • ${occ.name}` : ''}
                       </span>
                       {occupants.length > 1 && (
                         <button
                           type="button"
                           onClick={() => handleRemoveOccupant(idx)}
-                          className="text-rose-600 hover:text-rose-800 text-xs flex items-center gap-1 font-semibold"
+                          className="text-rose-600 hover:text-rose-800 text-xs flex items-center gap-1 font-semibold cursor-pointer"
                         >
                           <Trash2 className="w-3.5 h-3.5" /> Remove
                         </button>
@@ -400,18 +442,57 @@ function EditTenantModalContent({
                   </div>
                 ))}
               </div>
+
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={handleAddOccupant}
+                  className="inline-flex items-center gap-1 text-xs font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-lg border border-indigo-200 transition-colors cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" /> + Add Another Bachelor Member
+                </button>
+              </div>
             </div>
           )}
 
           {/* If FAMILY: Family info */}
           {tenantType === 'FAMILY' && (
             <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3">
-              <span className="text-xs font-bold text-slate-900 uppercase tracking-wider block">
-                Family Household Info
-              </span>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 pb-2">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Total Family Members</label>
+                  <span className="text-xs font-bold text-slate-900 uppercase tracking-wider block flex items-center gap-1.5">
+                    <Users className="w-4 h-4 text-indigo-600" />
+                    Family Household ({familyMembersCount} Members in Room)
+                  </span>
+                  <p className="text-[11px] text-slate-600">
+                    For family, only 1 primary person and emergency details are collected.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] font-bold text-slate-700">Members:</span>
+                  <div className="inline-flex rounded-lg border border-slate-300 p-0.5 bg-slate-100">
+                    {[1, 2, 3, 4, 5, 6].map((num) => (
+                      <button
+                        key={num}
+                        type="button"
+                        onClick={() => handleMemberCountChange(num)}
+                        className={`px-2 py-0.5 text-xs font-bold rounded transition-all cursor-pointer ${
+                          familyMembersCount === num
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200'
+                        }`}
+                      >
+                        {num}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Total Family Members Staying</label>
                   <input
                     type="number"
                     min={1}

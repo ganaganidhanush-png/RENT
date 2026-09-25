@@ -4,18 +4,21 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { 
   Users, Plus, Phone, ArrowLeft, Mail, Calendar, 
-  GraduationCap, Edit3, Trash2 
+  GraduationCap, Edit3, Trash2, CreditCard 
 } from 'lucide-react';
-import { Tenant, Room } from '@/types/database';
+import { Tenant, Room, Payment } from '@/types/database';
 import { getLocalTenants, deleteLocalTenant, getLocalRooms } from '@/lib/store/app-store';
 import { createClient } from '@/lib/supabase/client';
 import EditTenantModal from '@/components/tenants/edit-tenant-modal';
+import RecordPaymentModal from '@/components/payments/record-payment-modal';
 
 export default function TenantsPage() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [editingTenant, setEditingTenant] = useState<Tenant | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editingPayment, setEditingPayment] = useState<Payment | null>(null);
+  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [filterType, setFilterType] = useState<'ALL' | 'BACHELORS' | 'FAMILY'>('ALL');
 
   useEffect(() => {
@@ -41,6 +44,14 @@ export default function TenantsPage() {
     }
 
     loadData();
+
+    const handleDataChange = () => {
+      setRooms(getLocalRooms());
+      setTenants(getLocalTenants());
+    };
+
+    window.addEventListener('rentvault_data_updated', handleDataChange);
+    return () => window.removeEventListener('rentvault_data_updated', handleDataChange);
   }, []);
 
   const handleEditClick = (tenant: Tenant) => {
@@ -282,8 +293,8 @@ export default function TenantsPage() {
                   </div>
                 </div>
 
-                {/* Card Footer: Financials & Edit Profile */}
-                <div className="mt-4 pt-3 border-t border-slate-200 flex items-center justify-between text-xs">
+                {/* Card Footer: Financials & Actions */}
+                <div className="mt-4 pt-3 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
                   <div>
                     <span className="font-black text-slate-900 text-sm">
                       ₹{Number(t.monthly_rent).toLocaleString('en-IN')}
@@ -294,13 +305,45 @@ export default function TenantsPage() {
                     </span>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => handleEditClick(t)}
-                    className="inline-flex items-center gap-1 font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded-lg border border-indigo-200 transition-colors cursor-pointer"
-                  >
-                    <Edit3 className="w-3.5 h-3.5" /> Edit Profile
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const roomObj = rooms.find((r) => r.id === t.room_id) || t.room || undefined;
+                        const monthStr = new Date().toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+                        setEditingPayment({
+                          id: `pay-${Date.now()}`,
+                          tenant_id: t.id,
+                          room_id: t.room_id || '',
+                          billing_period_month: monthStr,
+                          billing_month: monthStr,
+                          amount_due: Number(t.monthly_rent),
+                          amount_paid: Number(t.monthly_rent),
+                          amount_pending: 0,
+                          payment_status: 'PAID',
+                          payment_date: new Date().toISOString().split('T')[0],
+                          payment_method: 'UPI',
+                          received_by: 'LANDLORD',
+                          created_at: new Date().toISOString(),
+                          tenant: t,
+                          room: roomObj,
+                        });
+                        setIsPaymentModalOpen(true);
+                      }}
+                      className="inline-flex items-center gap-1 font-bold text-emerald-800 hover:text-emerald-950 bg-emerald-100 hover:bg-emerald-200 px-2.5 py-1 rounded-lg border border-emerald-300 transition-colors cursor-pointer"
+                      title="Record rent payment for this tenant"
+                    >
+                      <CreditCard className="w-3.5 h-3.5" /> + Payment
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleEditClick(t)}
+                      className="inline-flex items-center gap-1 font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded-lg border border-indigo-200 transition-colors cursor-pointer"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" /> Edit Profile
+                    </button>
+                  </div>
                 </div>
               </div>
             );
@@ -319,6 +362,23 @@ export default function TenantsPage() {
             setEditingTenant(null);
           }}
           onSaved={handleTenantSaved}
+        />
+      )}
+
+      {/* Record Payment Modal */}
+      {isPaymentModalOpen && (
+        <RecordPaymentModal
+          payment={editingPayment}
+          tenants={tenants}
+          rooms={rooms}
+          isOpen={isPaymentModalOpen}
+          onClose={() => {
+            setIsPaymentModalOpen(false);
+            setEditingPayment(null);
+          }}
+          onSaved={() => {
+            // Handled via rentvault_data_updated event
+          }}
         />
       )}
     </div>

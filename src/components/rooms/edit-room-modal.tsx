@@ -205,21 +205,23 @@ export default function EditRoomModal({ room, isOpen, onClose, onSaved }: EditRo
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-slate-700 mb-1">Capacity (Beds)</label>
+                <label className="block text-[11px] font-bold text-slate-700 mb-1">Max Member Capacity</label>
                 <select
                   value={formData.capacity}
                   onChange={(e) => setFormData({ ...formData, capacity: Number(e.target.value) })}
                   className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 bg-white text-slate-900 focus:outline-none"
                 >
-                  <option value={1}>1 Person (Single)</option>
-                  <option value={2}>2 Persons (2 Sharing)</option>
-                  <option value={3}>3 Persons (3 Sharing)</option>
-                  <option value={4}>4 Persons (4 Sharing)</option>
+                  <option value={1}>1 Member</option>
+                  <option value={2}>2 Members</option>
+                  <option value={3}>3 Members</option>
+                  <option value={4}>4 Members</option>
+                  <option value={5}>5 Members</option>
+                  <option value={6}>6 Members</option>
                 </select>
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-slate-700 mb-1">Current Occupants</label>
+                <label className="block text-[11px] font-bold text-slate-700 mb-1">Members Currently Staying</label>
                 <input
                   type="number"
                   min={0}
@@ -243,12 +245,12 @@ export default function EditRoomModal({ room, isOpen, onClose, onSaved }: EditRo
             <div className="pt-2 border-t border-indigo-200/60 flex items-center justify-between">
               <div>
                 <span className="text-xs font-bold text-slate-900 block">
-                  Any chance for someone to get in? (Empty bed / Vacancy)
+                  Any vacancy for someone to move in?
                 </span>
                 <p className="text-[11px] text-slate-600">
                   {formData.canSomeoneGetIn 
-                    ? '🟢 Yes! Space available for new occupant/bachelor to move in.' 
-                    : '🔴 No. Room is fully booked.'}
+                    ? '🟢 Yes! Space available for new occupant to move in.' 
+                    : '🔴 No. Room is fully occupied.'}
                 </p>
               </div>
               <label className="relative inline-flex items-center cursor-pointer">

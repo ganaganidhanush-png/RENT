@@ -8,9 +8,9 @@ import {
   Loader2, AlertCircle, ArrowLeft, GraduationCap, Users, Plus, Trash2, Building2, IndianRupee, Sparkles
 } from 'lucide-react';
 import Link from 'next/link';
-import { Room, Tenant, BachelorOccupant, TenantType } from '@/types/database';
+import { Room, Tenant, BachelorOccupant, TenantType, Payment, DocumentRecord } from '@/types/database';
 import { DEFAULT_ROOMS } from '@/lib/constants/rooms';
-import { getLocalRooms, saveLocalTenant } from '@/lib/store/app-store';
+import { getLocalRooms, saveLocalTenant, saveLocalPayment, saveLocalDocument } from '@/lib/store/app-store';
 
 interface AddTenantFormProps {
   vacantRooms?: Room[];
@@ -113,28 +113,79 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
     }));
   };
 
+  const handleTenantTypeSelect = (type: TenantType) => {
+    setTenantType(type);
+    if (type === 'FAMILY') {
+      if (occupants[0]?.name && !formData.fullName) {
+        setFormData((prev) => ({
+          ...prev,
+          fullName: occupants[0].name,
+          phone: occupants[0].phone || prev.phone,
+        }));
+      }
+    } else {
+      if (formData.fullName) {
+        const updated = [...occupants];
+        updated[0] = {
+          ...updated[0],
+          name: formData.fullName,
+          phone: formData.phone,
+        };
+        setOccupants(updated);
+      }
+    }
+  };
+
+  const handleMemberCountChange = (count: number) => {
+    const target = Math.max(1, Math.min(10, count));
+    if (tenantType === 'BACHELORS') {
+      const current = [...occupants];
+      if (target > current.length) {
+        const added: BachelorOccupant[] = Array.from(
+          { length: target - current.length },
+          () => ({
+            name: '',
+            phone: '',
+            occupation: 'College Student',
+            organization: '',
+            role_or_course: '',
+            aadhar_number: '',
+          })
+        );
+        setOccupants([...current, ...added]);
+      } else if (target < current.length) {
+        setOccupants(current.slice(0, target));
+      }
+    } else {
+      setFormData((prev) => ({ ...prev, familyMembersCount: target }));
+    }
+  };
+
   const handleAddOccupant = () => {
-    setOccupants([
-      ...occupants,
-      {
-        name: '',
-        phone: '',
-        occupation: 'College Student',
-        organization: '',
-        role_or_course: '',
-        aadhar_number: '',
-      },
-    ]);
+    handleMemberCountChange(occupants.length + 1);
   };
 
   const handleRemoveOccupant = (index: number) => {
-    setOccupants(occupants.filter((_, i) => i !== index));
+    if (occupants.length <= 1) return;
+    const updated = occupants.filter((_, i) => i !== index);
+    setOccupants(updated);
+    if (index === 0 && updated.length > 0) {
+      setFormData((prev) => ({
+        ...prev,
+        fullName: updated[0].name,
+        phone: updated[0].phone,
+      }));
+    }
   };
 
   const handleOccupantChange = (index: number, field: keyof BachelorOccupant, val: string) => {
     const updated = [...occupants];
     updated[index] = { ...updated[index], [field]: val };
     setOccupants(updated);
+    if (index === 0) {
+      if (field === 'name') setFormData((prev) => ({ ...prev, fullName: val }));
+      if (field === 'phone') setFormData((prev) => ({ ...prev, phone: val }));
+    }
   };
 
   const uploadToVault = async (file: File, tenantId: string, docType: string) => {
@@ -168,7 +219,35 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
 
     try {
       if (!formData.roomId) throw new Error('Please select an assigned room.');
-      if (!formData.fullName) throw new Error('Please enter the primary tenant name.');
+
+      const isBachelors = tenantType === 'BACHELORS';
+      const primaryFullName = (isBachelors ? (occupants[0]?.name || formData.fullName) : formData.fullName).trim();
+      const primaryPhone = (isBachelors ? (occupants[0]?.phone || formData.phone) : formData.phone).trim();
+
+      if (!primaryFullName) {
+        throw new Error(isBachelors ? 'Please enter Member #1 (Lead Tenant) full legal name.' : 'Please enter the primary person full legal name.');
+      }
+      if (!primaryPhone) {
+        throw new Error(isBachelors ? 'Please enter Member #1 contact phone number.' : 'Please enter the primary person contact phone number.');
+      }
+
+      if (isBachelors) {
+        for (let i = 0; i < occupants.length; i++) {
+          if (!occupants[i].name?.trim()) {
+            throw new Error(`Please enter the name for Bachelor Member #${i + 1}.`);
+          }
+          if (!occupants[i].phone?.trim()) {
+            throw new Error(`Please enter the phone number for Bachelor Member #${i + 1}.`);
+          }
+        }
+      }
+
+      if (!formData.emergencyName?.trim()) {
+        throw new Error('Please enter the emergency contact person name.');
+      }
+      if (!formData.emergencyPhone?.trim()) {
+        throw new Error('Please enter the emergency contact phone number.');
+      }
 
       const selectedRoom = rooms.find((r) => r.id === formData.roomId);
       const generatedId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `tenant-${Date.now()}`;
@@ -177,14 +256,14 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
       const newTenant: Tenant = {
         id: generatedId,
         room_id: formData.roomId,
-        full_name: formData.fullName,
-        phone: formData.phone || (occupants[0]?.phone || ''),
+        full_name: primaryFullName,
+        phone: primaryPhone,
         email: formData.email || null,
         tenant_type: tenantType,
-        occupants: tenantType === 'BACHELORS' ? occupants : null,
-        family_members_count: tenantType === 'FAMILY' ? Number(formData.familyMembersCount) : null,
-        primary_occupation: tenantType === 'FAMILY' ? formData.primaryOccupation : (occupants[0]?.occupation || null),
-        college_or_company: tenantType === 'FAMILY' ? null : (occupants[0]?.organization || null),
+        occupants: isBachelors ? occupants : null,
+        family_members_count: isBachelors ? occupants.length : Number(formData.familyMembersCount || 1),
+        primary_occupation: isBachelors ? (occupants[0]?.occupation || null) : (formData.primaryOccupation || null),
+        college_or_company: isBachelors ? (occupants[0]?.organization || null) : null,
         emergency_contact_name: formData.emergencyName,
         emergency_contact_phone: formData.emergencyPhone,
         emergency_contact_relation: formData.emergencyRelation,
@@ -199,6 +278,79 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
 
       // 1. Save in local app store immediately (so it instantly shows on UI)
       saveLocalTenant(newTenant);
+
+      // Auto-create initial billing payment entry for the tenant
+      const currentMonthName = new Date().toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+      const initialPayment: Payment = {
+        id: `pay-${Date.now()}`,
+        tenant_id: generatedId,
+        room_id: formData.roomId,
+        billing_period_month: currentMonthName,
+        billing_month: currentMonthName,
+        amount_due: Number(formData.monthlyRent),
+        amount_paid: 0,
+        amount_pending: Number(formData.monthlyRent),
+        payment_status: 'PENDING',
+        payment_date: null,
+        payment_method: 'UPI',
+        received_by: 'LANDLORD',
+        created_at: new Date().toISOString(),
+        tenant: newTenant,
+        room: selectedRoom,
+      };
+      saveLocalPayment(initialPayment);
+
+      // Record uploaded documents in local store
+      if (aadharFile) {
+        const aadharDoc: DocumentRecord = {
+          id: `doc-aadhar-${Date.now()}`,
+          tenant_id: generatedId,
+          room_id: formData.roomId,
+          doc_type: 'AADHAR_CARD',
+          storage_path: `tenants/${generatedId}/aadhar_${aadharFile.name}`,
+          file_name: aadharFile.name,
+          mime_type: aadharFile.type || 'application/pdf',
+          file_size_bytes: aadharFile.size,
+          created_at: new Date().toISOString(),
+          tenant: newTenant,
+          room: selectedRoom,
+        };
+        saveLocalDocument(aadharDoc);
+      }
+
+      if (agreementFile) {
+        const agreementDoc: DocumentRecord = {
+          id: `doc-agreement-${Date.now()}`,
+          tenant_id: generatedId,
+          room_id: formData.roomId,
+          doc_type: 'RENTAL_AGREEMENT',
+          storage_path: `tenants/${generatedId}/agreement_${agreementFile.name}`,
+          file_name: agreementFile.name,
+          mime_type: agreementFile.type || 'application/pdf',
+          file_size_bytes: agreementFile.size,
+          created_at: new Date().toISOString(),
+          tenant: newTenant,
+          room: selectedRoom,
+        };
+        saveLocalDocument(agreementDoc);
+      }
+
+      if (tenantPhoto) {
+        const photoDoc: DocumentRecord = {
+          id: `doc-photo-${Date.now()}`,
+          tenant_id: generatedId,
+          room_id: formData.roomId,
+          doc_type: 'TENANT_PHOTO',
+          storage_path: `tenants/${generatedId}/photo_${tenantPhoto.name}`,
+          file_name: tenantPhoto.name,
+          mime_type: tenantPhoto.type || 'image/jpeg',
+          file_size_bytes: tenantPhoto.size,
+          created_at: new Date().toISOString(),
+          tenant: newTenant,
+          room: selectedRoom,
+        };
+        saveLocalDocument(photoDoc);
+      }
 
       // 2. Try inserting into Supabase
       try {
@@ -299,7 +451,7 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <button
               type="button"
-              onClick={() => setTenantType('BACHELORS')}
+              onClick={() => handleTenantTypeSelect('BACHELORS')}
               className={`p-4 rounded-xl border-2 text-left flex items-start gap-3.5 transition-all cursor-pointer ${
                 tenantType === 'BACHELORS'
                   ? 'border-indigo-600 bg-indigo-50/80 shadow-sm'
@@ -312,14 +464,14 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
               <div>
                 <span className="text-sm font-bold text-slate-900 block">Bachelors (Students / Working)</span>
                 <p className="text-xs text-slate-600 mt-1">
-                  Upload individual details for each bachelor: college name, company, course, role & Aadhar proofs.
+                  Choose number of members to take each person&apos;s college/company & role details.
                 </p>
               </div>
             </button>
 
             <button
               type="button"
-              onClick={() => setTenantType('FAMILY')}
+              onClick={() => handleTenantTypeSelect('FAMILY')}
               className={`p-4 rounded-xl border-2 text-left flex items-start gap-3.5 transition-all cursor-pointer ${
                 tenantType === 'FAMILY'
                   ? 'border-indigo-600 bg-indigo-50/80 shadow-sm'
@@ -332,7 +484,7 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
               <div>
                 <span className="text-sm font-bold text-slate-900 block">Family Household</span>
                 <p className="text-xs text-slate-600 mt-1">
-                  Single family tenancy with primary earner, family member count, and emergency contact.
+                  Family tenancy: requires only 1 primary person (Head of Family) and emergency contact.
                 </p>
               </div>
             </button>
@@ -373,7 +525,7 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
                     <span className="text-rose-700 font-bold">🔴 Fully Booked</span>
                   )}
                   <span className="block text-slate-600 mt-0.5 font-medium">
-                    Capacity: {currentSelectedRoom.capacity || 2} Beds • Current: {currentSelectedRoom.current_occupancy || 0} Occupants
+                    Max Capacity: {currentSelectedRoom.capacity || 2} Members • Members Staying: {currentSelectedRoom.current_occupancy || 0} Members
                   </span>
                 </div>
               )}
@@ -433,85 +585,52 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
           </div>
         </div>
 
-        {/* Step 3: Primary Contact / Lead Person */}
-        <div className="space-y-4">
-          <div className="border-b border-slate-200 pb-2">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2">
-              <User className="w-4 h-4 text-indigo-600" />
-              3. Primary Contact Person
-            </h2>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-800 mb-1.5">Full Legal Name *</label>
-              <input
-                type="text"
-                placeholder="Enter full legal name"
-                value={formData.fullName}
-                onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
-                required
-                className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 focus:outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-800 mb-1.5">Contact Phone *</label>
-              <input
-                type="tel"
-                placeholder="Enter 10-digit mobile number"
-                value={formData.phone}
-                onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                required
-                className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 focus:outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-800 mb-1.5">Email Address</label>
-              <input
-                type="email"
-                placeholder="Enter email address"
-                value={formData.email}
-                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 focus:outline-none"
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Step 4: If BACHELORS -> Individual Details for EACH Bachelor occupant */}
+        {/* Step 3: Dynamic Members Staying in Room */}
+        {/* If BACHELORS: Choose number of members -> Takes each member's individual details */}
         {tenantType === 'BACHELORS' && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+          <div className="space-y-6">
+            <div className="border-b border-slate-200 pb-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h2 className="text-xs font-bold uppercase tracking-wider text-indigo-700 flex items-center gap-2">
                   <GraduationCap className="w-4 h-4 text-indigo-600" />
-                  4. Bachelor Roommates ({occupants.length} Occupants in Room)
+                  3. Bachelor Roommates ({occupants.length} Members Staying in Room)
                 </h2>
                 <p className="text-xs text-slate-600 mt-0.5">
-                  Enter details for each person: are they in college, working, which university/company, etc.
+                  Select how many members stay in this room. Details are collected for each individual roommate.
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={handleAddOccupant}
-                className="inline-flex items-center gap-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 px-3.5 py-1.5 rounded-lg shadow-xs transition-colors cursor-pointer"
-              >
-                <Plus className="w-3.5 h-3.5" /> Add Bachelor
-              </button>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-700">No. of Members:</span>
+                <div className="inline-flex rounded-lg border border-slate-300 p-0.5 bg-slate-100">
+                  {[1, 2, 3, 4, 5, 6].map((num) => (
+                    <button
+                      key={num}
+                      type="button"
+                      onClick={() => handleMemberCountChange(num)}
+                      className={`px-2.5 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                        occupants.length === num
+                          ? 'bg-indigo-600 text-white shadow-xs'
+                          : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200'
+                      }`}
+                    >
+                      {num}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
 
             <div className="space-y-4">
               {occupants.map((occ, idx) => (
-                <div key={idx} className="p-4 rounded-xl border border-indigo-200 bg-indigo-50/50 space-y-3">
+                <div key={idx} className="p-4 rounded-xl border-2 border-indigo-200 bg-indigo-50/40 space-y-3">
                   <div className="flex items-center justify-between border-b border-indigo-100 pb-2">
-                    <span className="text-xs font-bold text-indigo-900 flex items-center gap-2">
-                      <span className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[10px]">
+                    <span className="text-xs font-bold text-indigo-950 flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[10px] font-bold">
                         {idx + 1}
                       </span>
-                      Bachelor #{idx + 1} {occ.name ? `• ${occ.name}` : ''}
+                      {idx === 0 ? 'Member #1 (Lead / Primary Tenant)' : `Member #${idx + 1} (Roommate)`}
+                      {occ.name ? ` • ${occ.name}` : ''}
                     </span>
                     {occupants.length > 1 && (
                       <button
@@ -526,11 +645,13 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
-                      <label className="block text-[11px] font-bold text-slate-800 mb-1">Full Name *</label>
+                      <label className="block text-[11px] font-bold text-slate-800 mb-1">
+                        Full Legal Name *
+                      </label>
                       <input
                         type="text"
                         required
-                        placeholder="Enter roommate name"
+                        placeholder={idx === 0 ? 'Enter lead tenant name' : 'Enter roommate name'}
                         value={occ.name}
                         onChange={(e) => handleOccupantChange(idx, 'name', e.target.value)}
                         className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:outline-none focus:border-indigo-600"
@@ -538,11 +659,13 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
                     </div>
 
                     <div>
-                      <label className="block text-[11px] font-bold text-slate-800 mb-1">Phone Number *</label>
+                      <label className="block text-[11px] font-bold text-slate-800 mb-1">
+                        Contact Phone *
+                      </label>
                       <input
                         type="tel"
                         required
-                        placeholder="Enter phone number"
+                        placeholder="Enter 10-digit mobile number"
                         value={occ.phone}
                         onChange={(e) => handleOccupantChange(idx, 'phone', e.target.value)}
                         className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:outline-none focus:border-indigo-600"
@@ -550,7 +673,9 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
                     </div>
 
                     <div>
-                      <label className="block text-[11px] font-bold text-slate-800 mb-1">What do they do? *</label>
+                      <label className="block text-[11px] font-bold text-slate-800 mb-1">
+                        What do they do? *
+                      </label>
                       <select
                         value={occ.occupation}
                         onChange={(e) => handleOccupantChange(idx, 'occupation', e.target.value)}
@@ -568,11 +693,13 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
-                      <label className="block text-[11px] font-bold text-slate-800 mb-1">College or Company Name *</label>
+                      <label className="block text-[11px] font-bold text-slate-800 mb-1">
+                        College or Company Name *
+                      </label>
                       <input
                         type="text"
                         required
-                        placeholder="Enter college or company name"
+                        placeholder="e.g. IIT, NIT, TCS, Infosys, etc."
                         value={occ.organization}
                         onChange={(e) => handleOccupantChange(idx, 'organization', e.target.value)}
                         className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:outline-none focus:border-indigo-600"
@@ -580,10 +707,12 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
                     </div>
 
                     <div>
-                      <label className="block text-[11px] font-bold text-slate-800 mb-1">Course / Year or Designation</label>
+                      <label className="block text-[11px] font-bold text-slate-800 mb-1">
+                        Course / Year or Designation
+                      </label>
                       <input
                         type="text"
-                        placeholder="e.g. Course, branch, or designation"
+                        placeholder="e.g. B.Tech 3rd Yr or SDE-1"
                         value={occ.role_or_course || ''}
                         onChange={(e) => handleOccupantChange(idx, 'role_or_course', e.target.value)}
                         className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:outline-none focus:border-indigo-600"
@@ -591,69 +720,181 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
                     </div>
 
                     <div>
-                      <label className="block text-[11px] font-bold text-slate-800 mb-1">Aadhar Number (Optional)</label>
-                      <input
-                        type="text"
-                        placeholder="12-digit Aadhar"
-                        value={occ.aadhar_number || ''}
-                        onChange={(e) => handleOccupantChange(idx, 'aadhar_number', e.target.value)}
-                        className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:outline-none focus:border-indigo-600"
-                      />
+                      <label className="block text-[11px] font-bold text-slate-800 mb-1">
+                        {idx === 0 ? 'Email Address (Optional)' : 'Aadhar / ID Number (Optional)'}
+                      </label>
+                      {idx === 0 ? (
+                        <input
+                          type="email"
+                          placeholder="Lead contact email"
+                          value={formData.email}
+                          onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                          className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:outline-none focus:border-indigo-600"
+                        />
+                      ) : (
+                        <input
+                          type="text"
+                          placeholder="12-digit Aadhar"
+                          value={occ.aadhar_number || ''}
+                          onChange={(e) => handleOccupantChange(idx, 'aadhar_number', e.target.value)}
+                          className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:outline-none focus:border-indigo-600"
+                        />
+                      )}
                     </div>
                   </div>
                 </div>
               ))}
             </div>
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={handleAddOccupant}
+                className="inline-flex items-center gap-1.5 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-3.5 py-2 rounded-lg transition-colors cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" /> + Add Another Bachelor Member
+              </button>
+            </div>
           </div>
         )}
 
-        {/* If FAMILY -> Family details */}
+        {/* If FAMILY: Choose number of members -> Only 1 Person Details & Emergency Details */}
         {tenantType === 'FAMILY' && (
-          <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center gap-2">
-              <Users className="w-4 h-4 text-indigo-600" />
-              4. Family Members & Primary Earner
-            </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-6">
+            <div className="border-b border-slate-200 pb-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <label className="block text-xs font-bold text-slate-800 mb-1">Total Family Members Moving In *</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={formData.familyMembersCount}
-                  onChange={(e) => setFormData({ ...formData, familyMembersCount: Number(e.target.value) })}
-                  className="w-full text-xs font-bold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:outline-none"
-                />
+                <h2 className="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center gap-2">
+                  <Users className="w-4 h-4 text-indigo-600" />
+                  3. Family Members Count ({formData.familyMembersCount} Members Staying in Room)
+                </h2>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Select how many family members stay in the room. For families, only the 1 primary person and emergency details are required.
+                </p>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-800 mb-1">Primary Earner&apos;s Occupation</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Senior Software Architect / Govt Officer"
-                  value={formData.primaryOccupation}
-                  onChange={(e) => setFormData({ ...formData, primaryOccupation: e.target.value })}
-                  className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:outline-none"
-                />
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-700">No. of Members:</span>
+                <div className="inline-flex rounded-lg border border-slate-300 p-0.5 bg-slate-100">
+                  {[1, 2, 3, 4, 5, 6].map((num) => (
+                    <button
+                      key={num}
+                      type="button"
+                      onClick={() => handleMemberCountChange(num)}
+                      className={`px-2.5 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                        formData.familyMembersCount === num
+                          ? 'bg-indigo-600 text-white shadow-xs'
+                          : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200'
+                      }`}
+                    >
+                      {num}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Note banner explaining 1 person policy for family */}
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-xs font-semibold flex items-center gap-2">
+              <span className="text-base">👨‍👩‍👧‍👦</span>
+              <span>
+                <strong>Family Tenancy:</strong> Since this is a family, you only need to provide details for <strong>1 primary person</strong> (Head of Family) and emergency details.
+              </span>
+            </div>
+
+            {/* Primary Person (Head of Family / Earning Member) */}
+            <div className="p-5 rounded-xl border-2 border-slate-200 bg-slate-50 space-y-4">
+              <span className="text-xs font-bold text-slate-900 uppercase tracking-wider block flex items-center gap-2">
+                <User className="w-4 h-4 text-indigo-600" />
+                Primary Person (Head of Family / Main Tenant)
+              </span>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-800 mb-1.5">Full Legal Name *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Enter head of family name"
+                    value={formData.fullName}
+                    onChange={(e) => {
+                      setFormData({ ...formData, fullName: e.target.value });
+                      if (occupants.length > 0) {
+                        const updated = [...occupants];
+                        updated[0] = { ...updated[0], name: e.target.value };
+                        setOccupants(updated);
+                      }
+                    }}
+                    className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:outline-none focus:border-indigo-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-800 mb-1.5">Contact Phone *</label>
+                  <input
+                    type="tel"
+                    required
+                    placeholder="Enter 10-digit mobile number"
+                    value={formData.phone}
+                    onChange={(e) => {
+                      setFormData({ ...formData, phone: e.target.value });
+                      if (occupants.length > 0) {
+                        const updated = [...occupants];
+                        updated[0] = { ...updated[0], phone: e.target.value };
+                        setOccupants(updated);
+                      }
+                    }}
+                    className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:outline-none focus:border-indigo-600"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-800 mb-1.5">Email Address (Optional)</label>
+                  <input
+                    type="email"
+                    placeholder="Enter email address"
+                    value={formData.email}
+                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:outline-none focus:border-indigo-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-800 mb-1.5">Primary Earner&apos;s Profession / Occupation</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Senior Software Architect / Govt Officer / Business"
+                    value={formData.primaryOccupation}
+                    onChange={(e) => setFormData({ ...formData, primaryOccupation: e.target.value })}
+                    className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:outline-none focus:border-indigo-600"
+                  />
+                </div>
               </div>
             </div>
           </div>
         )}
 
-        {/* Step 5: Emergency Contact */}
+        {/* Step 4: Emergency Contact Details */}
         <div className="space-y-4">
           <div className="border-b border-slate-200 pb-2">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-              5. Emergency Contact (Parents / Guardian)
+            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-indigo-600" />
+              4. Emergency Contact Details
             </h2>
+            <p className="text-xs text-slate-600 mt-0.5">
+              {tenantType === 'FAMILY' 
+                ? 'Emergency contact person outside or within the family (Relative, Sibling, Parent, Friend)' 
+                : 'Emergency contact (Parents / Guardian) for the roommates'}
+            </p>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
-              <label className="block text-xs font-bold text-slate-800 mb-1.5">Contact Name *</label>
+              <label className="block text-xs font-bold text-slate-800 mb-1.5">Emergency Contact Name *</label>
               <input
                 type="text"
-                placeholder="Enter emergency contact name"
+                placeholder="Enter contact name"
                 value={formData.emergencyName}
                 onChange={(e) => setFormData({ ...formData, emergencyName: e.target.value })}
                 required
@@ -665,7 +906,7 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
               <label className="block text-xs font-bold text-slate-800 mb-1.5">Emergency Phone *</label>
               <input
                 type="tel"
-                placeholder="Enter emergency phone number"
+                placeholder="Enter 10-digit mobile"
                 value={formData.emergencyPhone}
                 onChange={(e) => setFormData({ ...formData, emergencyPhone: e.target.value })}
                 required
@@ -684,18 +925,19 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
                 <option value="Spouse">Spouse</option>
                 <option value="Sibling">Sibling</option>
                 <option value="Guardian">Guardian</option>
+                <option value="Relative">Relative</option>
                 <option value="Friend">Friend</option>
               </select>
             </div>
           </div>
         </div>
 
-        {/* Step 6: Document Vault Uploads */}
+        {/* Step 5: Document Vault Uploads */}
         <div className="space-y-4">
           <div className="flex items-center justify-between border-b border-slate-200 pb-2">
             <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
               <ShieldCheck className="w-4 h-4 text-emerald-600" />
-              6. Document Vault (Private & Encrypted)
+              5. Document Vault (Private & Encrypted)
             </h2>
             <span className="text-xs font-semibold text-slate-500">PDF, JPG, PNG up to 10MB</span>
           </div>

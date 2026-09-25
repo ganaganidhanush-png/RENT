@@ -1,7 +1,7 @@
 export type RoomStatus = 'VACANT' | 'OCCUPIED' | 'MAINTENANCE';
 export type TenantStatus = 'ACTIVE' | 'NOTICE_PERIOD' | 'MOVED_OUT';
 export type TenantType = 'BACHELORS' | 'FAMILY';
-export type DocumentType = 'AADHAR_CARD' | 'RENTAL_AGREEMENT' | 'TENANT_PHOTO' | 'POLICE_VERIFICATION' | 'OTHER';
+export type DocumentType = 'AADHAR_CARD' | 'RENTAL_AGREEMENT' | 'TENANT_PHOTO' | 'POLICE_VERIFICATION' | 'ELECTRICITY_BILL' | 'OTHER';
 export type PaymentMethod = 'UPI' | 'CASH' | 'BANK_TRANSFER' | 'CHEQUE';
 export type PaymentReceiver = 'LANDLORD' | 'CARETAKER';
 export type PaymentStatus = 'PAID' | 'PARTIAL' | 'PENDING' | 'OVERDUE';
@@ -59,7 +59,7 @@ export interface Tenant {
 
 export interface DocumentRecord {
   id: string;
-  tenant_id: string;
+  tenant_id: string | null;
   room_id?: string | null;
   doc_type: DocumentType;
   storage_path: string;
@@ -67,6 +67,8 @@ export interface DocumentRecord {
   mime_type?: string | null;
   file_size_bytes?: number | null;
   created_at?: string;
+  tenant?: Tenant | null;
+  room?: Room | null;
 }
 
 export interface Payment {
@@ -74,6 +76,7 @@ export interface Payment {
   tenant_id: string;
   room_id: string;
   billing_period_month: string;
+  billing_month?: string;
   amount_due: number;
   amount_paid: number;
   amount_pending: number;
