@@ -9,7 +9,8 @@ import {
 import { Payment, Tenant, Room, PaymentMethod, PaymentStatus, PaymentReceiver, PaymentType } from '@/types/database';
 import { 
   getLocalTenants, getLocalRooms, getLocalPayments, saveLocalPayment, 
-  getLandlordProfile, isTenantMoveInThisMonth, getNextYearMonth, getDefaultRentBillingMonth 
+  getLandlordProfile, isTenantMoveInThisMonth, getNextYearMonth, getDefaultRentBillingMonth,
+  getPaymentYearMonth, formatBillingMonth 
 } from '@/lib/store/app-store';
 import { createClient } from '@/lib/supabase/client';
 
@@ -77,10 +78,7 @@ export default function RecordPaymentModal({
   };
 
   const initialYearMonth = () => {
-    if (!payment?.billing_period_month) return defaultYearMonth();
-    if (/^\d{4}-\d{2}/.test(payment.billing_period_month)) {
-      return payment.billing_period_month.slice(0, 7);
-    }
+    if (payment) return getPaymentYearMonth(payment);
     return defaultYearMonth();
   };
 
@@ -125,13 +123,14 @@ export default function RecordPaymentModal({
       const rId = payment?.room_id || preselectedRoomId || (activeT?.room_id || currentRooms[0]?.id || '');
       const defaultDue = payment?.amount_due !== undefined ? payment.amount_due : (activeT?.monthly_rent || 0);
 
+      const initialType = payment?.payment_type || 'RENT';
       setSelectedTenantId(tId);
       setSelectedRoomId(rId);
-      setPaymentType(payment?.payment_type || 'RENT');
+      setPaymentType(initialType);
       setBillingMonthYear(
-        payment?.billing_period_month && /^\d{4}-\d{2}/.test(payment.billing_period_month)
-          ? payment.billing_period_month.slice(0, 7)
-          : (activeT && (payment?.payment_type || 'RENT') === 'RENT'
+        payment
+          ? getPaymentYearMonth(payment)
+          : (activeT && initialType === 'RENT'
               ? getDefaultRentBillingMonth(activeT)
               : defaultYearMonth())
       );
@@ -171,7 +170,7 @@ export default function RecordPaymentModal({
   const pastRentPayments = allPayments.filter((p) =>
     p.tenant_id === selectedTenantId &&
     p.payment_type === 'RENT' &&
-    (p.billing_period_month || '').slice(0, 7) === billingMonthYear &&
+    getPaymentYearMonth(p) === billingMonthYear &&
     Number(p.amount_paid) > 0 &&
     p.id !== payment?.id
   );
@@ -317,7 +316,7 @@ export default function RecordPaymentModal({
 
     // Standardize billing_period_month to YYYY-MM-01 (Postgres DATE requirement)
     const isoBillingPeriod = `${billingMonthYear}-01`;
-    const billingDisplay = new Date(`${billingMonthYear}-15`).toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+    const billingDisplay = formatBillingMonth(billingMonthYear);
 
     let finalPaymentId = payment?.id || `pay-${Date.now()}`;
 

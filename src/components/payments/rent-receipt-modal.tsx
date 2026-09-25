@@ -3,7 +3,7 @@
 import React from 'react';
 import { X, Printer, Share2, CheckCircle2, Building2, User, Calendar, IndianRupee, FileText } from 'lucide-react';
 import { Payment, PaymentType, Tenant, Room } from '@/types/database';
-import { getLandlordProfile } from '@/lib/store/app-store';
+import { getLandlordProfile, formatBillingMonth } from '@/lib/store/app-store';
 
 interface RentReceiptModalProps {
   payment: Payment | null;
@@ -28,7 +28,7 @@ export default function RentReceiptModal({ payment, tenant, room, isOpen, onClos
   const tenantName = effectiveTenant?.full_name || 'Tenant';
   const tenantPhone = effectiveTenant?.phone || '';
   const roomNumber = effectiveRoom?.room_number || 'Unit';
-  const billingMonth = payment.billing_month || payment.billing_period_month || 'Current Month';
+  const billingMonth = formatBillingMonth(payment);
 
   const getCategoryLabel = (type?: PaymentType) => {
     switch (type) {

@@ -11,7 +11,8 @@ import EditProfileModal from './edit-profile-modal';
 import RenderKeepAliveModal from './render-keep-alive-modal';
 import { 
   getLandlordProfile, LandlordProfile, 
-  getLocalRooms, getLocalTenants, getLocalPayments 
+  getLocalRooms, getLocalTenants, getLocalPayments,
+  formatBillingMonth
 } from '@/lib/store/app-store';
 import { Room, Tenant, Payment } from '@/types/database';
 
@@ -86,7 +87,8 @@ export default function Header() {
     }).slice(0, 4);
 
     const matchedPayments = allPayments.filter((p) => {
-      const monthMatch = (p.billing_month && p.billing_month.toLowerCase().includes(q)) || (p.billing_period_month && p.billing_period_month.includes(q));
+      const monthDisplay = formatBillingMonth(p).toLowerCase();
+      const monthMatch = monthDisplay.includes(q) || (p.billing_period_month && p.billing_period_month.includes(q));
       const refMatch = p.transaction_ref && p.transaction_ref.toLowerCase().includes(q);
       const tenantMatch = p.tenant?.full_name && p.tenant.full_name.toLowerCase().includes(q);
       return monthMatch || refMatch || tenantMatch;
@@ -229,7 +231,7 @@ export default function Header() {
                           >
                             <span className="font-bold text-slate-900 flex items-center gap-1.5">
                               <IndianRupee className="w-3.5 h-3.5 text-emerald-600" />
-                              {p.billing_month || p.billing_period_month}
+                              {formatBillingMonth(p)}
                             </span>
                             <span className="text-[11px] font-black text-emerald-700">
                               ₹{Number(p.amount_paid).toLocaleString('en-IN')} ({p.payment_status})

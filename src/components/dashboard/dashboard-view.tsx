@@ -12,7 +12,8 @@ import { DEFAULT_ROOMS } from '@/lib/constants/rooms';
 import { 
   getLocalRooms, getLocalTenants, getLocalPayments, 
   mergeTenants, mergeRooms, getLandlordProfile,
-  getTenantAdvanceSummary, AdvanceTrackingSummary
+  getTenantAdvanceSummary, AdvanceTrackingSummary,
+  formatBillingMonth, getPaymentYearMonth
 } from '@/lib/store/app-store';
 import RecordPaymentModal from '@/components/payments/record-payment-modal';
 import AdvanceDepositModal from '@/components/tenants/advance-deposit-modal';
@@ -157,21 +158,7 @@ export default function DashboardView({
       const isCurrentMonthPayment = (p: Payment) => {
         const isRent = (p.payment_type || 'RENT') === 'RENT';
         if (!isRent) return false;
-
-        const billingPeriod = (p.billing_period_month || '').slice(0, 7);
-        if (billingPeriod) {
-          return billingPeriod === currentYearMonth;
-        }
-
-        const billingName = (p.billing_month || '').toLowerCase();
-        if (billingName) {
-          const hasMonth = billingName.includes(currentMonthLongNameOnly.toLowerCase()) || billingName.includes(currentMonthShort.toLowerCase());
-          const hasYear = billingName.includes(String(currentYear));
-          if (hasMonth && hasYear) return true;
-        }
-
-        const payDateMonth = (p.payment_date || '').slice(0, 7);
-        return payDateMonth === currentYearMonth;
+        return getPaymentYearMonth(p) === currentYearMonth;
       };
 
       // Filter rent payments matching this tenant and current month
@@ -236,16 +223,7 @@ export default function DashboardView({
   const totalRentCollectedThisMonth = payments.filter((p) => {
     const isRent = (p.payment_type || 'RENT') === 'RENT';
     if (!isRent) return false;
-    const billingPeriod = (p.billing_period_month || '').slice(0, 7);
-    if (billingPeriod) return billingPeriod === currentYearMonth;
-    const billingName = (p.billing_month || '').toLowerCase();
-    if (billingName) {
-      const hasMonth = billingName.includes(currentMonthLongNameOnly.toLowerCase()) || billingName.includes(currentMonthShort.toLowerCase());
-      const hasYear = billingName.includes(String(currentYear));
-      if (hasMonth && hasYear) return true;
-    }
-    const payDateMonth = (p.payment_date || '').slice(0, 7);
-    return payDateMonth === currentYearMonth;
+    return getPaymentYearMonth(p) === currentYearMonth;
   }).reduce((sum, p) => sum + Number(p.amount_paid || 0), 0);
 
   // Rates for progress bars
@@ -855,7 +833,7 @@ export default function DashboardView({
                           </span>
                         </td>
                         <td className="py-3.5 px-4 text-slate-700 font-medium">
-                          {p.billing_month || 'Current'}
+                          {formatBillingMonth(p)}
                         </td>
                         <td className="py-3.5 px-4 font-bold text-emerald-700">
                           ₹{Number(p.amount_paid).toLocaleString('en-IN')}

@@ -10,7 +10,8 @@ import {
 import { Payment, PaymentType, Tenant, Room } from '@/types/database';
 import { 
   getLocalPayments, saveLocalPayment, deleteLocalPayment, 
-  getLocalTenants, getLocalRooms, mergeTenants, mergeRooms 
+  getLocalTenants, getLocalRooms, mergeTenants, mergeRooms,
+  formatBillingMonth, getPaymentYearMonth
 } from '@/lib/store/app-store';
 import { createClient } from '@/lib/supabase/client';
 import RecordPaymentModal from '@/components/payments/record-payment-modal';
@@ -182,7 +183,7 @@ export default function PaymentsPage() {
   // Accurately compute outstanding dues without stacking historical slice snapshots
   const cyclePendingMap = new Map<string, number>();
   for (const p of filteredPayments) {
-    const periodKey = (p.billing_period_month || p.billing_month || p.id).slice(0, 7);
+    const periodKey = getPaymentYearMonth(p);
     const key = `${p.tenant_id || ''}_${periodKey}_${p.payment_type || 'RENT'}`;
     const pending = Number(p.amount_pending || 0);
 
@@ -392,7 +393,14 @@ export default function PaymentsPage() {
                       <td className="py-3.5 px-4">
                         {getCategoryBadge(p.payment_type)}
                       </td>
-                      <td className="py-3.5 px-4 text-slate-700 font-bold">{p.billing_period_month}</td>
+                      <td className="py-3.5 px-4">
+                        <span className="font-bold text-slate-900 block">
+                          {formatBillingMonth(p)}
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-medium block">
+                          Cycle: {getPaymentYearMonth(p)}
+                        </span>
+                      </td>
                       <td className="py-3.5 px-4 font-bold text-slate-900">
                         ₹{Number(p.amount_due).toLocaleString('en-IN')}
                       </td>

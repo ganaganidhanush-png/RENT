@@ -279,7 +279,20 @@ export function getLocalPayments(): Payment[] {
   try {
     const raw = localStorage.getItem(PAYMENTS_STORAGE_KEY);
     if (!raw) return [];
-    return JSON.parse(raw);
+    const parsed: Payment[] = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+
+    // Auto-normalize billing_period_month and billing_month for all stored payments
+    return parsed.map((p) => {
+      const ym = getPaymentYearMonth(p);
+      const isoPeriod = `${ym}-01`;
+      const displayMonth = formatBillingMonth(p);
+      return {
+        ...p,
+        billing_period_month: isoPeriod,
+        billing_month: p.billing_month || displayMonth,
+      };
+    });
   } catch {
     return [];
   }
@@ -287,32 +300,42 @@ export function getLocalPayments(): Payment[] {
 
 export function saveLocalPayment(payment: Payment): Payment[] {
   const payments = getLocalPayments();
-  const targetMonth = (payment.billing_period_month || '').slice(0, 7);
-  const targetType = payment.payment_type || 'RENT';
+  const targetYm = getPaymentYearMonth(payment);
+  const targetIso = `${targetYm}-01`;
+  const targetDisplay = formatBillingMonth(payment);
+  const normalizedPayment: Payment = {
+    ...payment,
+    billing_period_month: targetIso,
+    billing_month: targetDisplay,
+    updated_at: new Date().toISOString(),
+  };
+
+  const targetType = normalizedPayment.payment_type || 'RENT';
   const index = payments.findIndex((p) => {
     // 1. Direct match by ID
-    if (p.id === payment.id) return true;
+    if (p.id === normalizedPayment.id) return true;
     
     // 2. Only replace if the existing record was an unfulfilled placeholder with zero payment
-    const pMonth = (p.billing_period_month || '').slice(0, 7);
+    const pYm = getPaymentYearMonth(p);
     const pType = p.payment_type || 'RENT';
     const isUnpaidPlaceholder = p.amount_paid === 0 && p.payment_status === 'PENDING';
     
     return Boolean(
       isUnpaidPlaceholder &&
       p.tenant_id &&
-      p.tenant_id === payment.tenant_id &&
-      targetMonth &&
-      pMonth === targetMonth &&
+      p.tenant_id === normalizedPayment.tenant_id &&
+      targetYm &&
+      pYm === targetYm &&
       pType === targetType
     );
   });
+
   let newPayments: Payment[];
   if (index >= 0) {
     newPayments = [...payments];
-    newPayments[index] = { ...newPayments[index], ...payment, updated_at: new Date().toISOString() };
+    newPayments[index] = { ...newPayments[index], ...normalizedPayment };
   } else {
-    newPayments = [payment, ...payments];
+    newPayments = [normalizedPayment, ...payments];
   }
   if (typeof window !== 'undefined') {
     localStorage.setItem(PAYMENTS_STORAGE_KEY, JSON.stringify(newPayments));
@@ -445,6 +468,82 @@ export function getDefaultRentBillingMonth(tenant?: Tenant | null, currentYearMo
     return getNextYearMonth(tenant.move_in_date.slice(0, 7));
   }
   return currentYM;
+}
+
+/**
+ * Safely extracts standard 'YYYY-MM' from any payment record or date string.
+ * Handles ISO dates ('2026-10-01'), human month names ('October 2026'),
+ * and legacy records without timezone drift.
+ */
+export function getPaymentYearMonth(
+  paymentOrDate?: Payment | { billing_period_month?: string; billing_month?: string; payment_date?: string } | string | null
+): string {
+  if (!paymentOrDate) {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  }
+
+  let str = '';
+  if (typeof paymentOrDate === 'string') {
+    str = paymentOrDate.trim();
+  } else {
+    // Check billing_period_month first, then billing_month, then payment_date
+    str = (paymentOrDate.billing_period_month || paymentOrDate.billing_month || paymentOrDate.payment_date || '').trim();
+  }
+
+  // 1. Direct YYYY-MM match (e.g. '2026-10' or '2026-10-01')
+  const isoMatch = str.match(/^(\d{4})-(\d{1,2})/);
+  if (isoMatch) {
+    const y = isoMatch[1];
+    const m = isoMatch[2].padStart(2, '0');
+    return `${y}-${m}`;
+  }
+
+  // 2. Human month string match (e.g. 'October 2026' or 'Oct 2026')
+  const humanMatch = str.match(/^([A-Za-z]+)\s+(\d{4})$/);
+  if (humanMatch) {
+    const monthName = humanMatch[1].toLowerCase();
+    const year = humanMatch[2];
+    const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    const idx = months.findIndex((m) => monthName.startsWith(m));
+    if (idx >= 0) {
+      return `${year}-${String(idx + 1).padStart(2, '0')}`;
+    }
+  }
+
+  // 3. Fallback
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+/**
+ * Accurately formats a payment's billing month for UI display (e.g., 'October 2026').
+ * Completely eliminates ISO date strings ('2026-10-01') in the display and prevents
+ * timezone off-by-one shifts.
+ */
+export function formatBillingMonth(
+  paymentOrDate?: Payment | { billing_period_month?: string; billing_month?: string; payment_date?: string } | string | null
+): string {
+  if (!paymentOrDate) return 'Current';
+
+  if (typeof paymentOrDate === 'object' && paymentOrDate !== null) {
+    if (paymentOrDate.billing_month && /^[A-Za-z]+\s+\d{4}$/.test(paymentOrDate.billing_month.trim())) {
+      return paymentOrDate.billing_month.trim();
+    }
+  }
+
+  const ym = getPaymentYearMonth(paymentOrDate);
+  const parts = ym.split('-');
+  const year = Number(parts[0]);
+  const month = Number(parts[1]);
+
+  if (isNaN(year) || isNaN(month) || month < 1 || month > 12) {
+    return 'Current';
+  }
+
+  // Noon on 15th prevents any timezone day-boundary leap
+  const safeDate = new Date(year, month - 1, 15, 12, 0, 0);
+  return safeDate.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
 }
 
 // ==================== ADVANCE / SECURITY DEPOSIT TRACKING ====================
