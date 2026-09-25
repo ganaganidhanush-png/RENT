@@ -1,7 +1,8 @@
 -- ========================================================
--- RENTVAULT - 5-ROOM MICRO-PROPERTY MANAGEMENT SCHEMA
+-- RENTVAULT - 6-ROOM MICRO-PROPERTY MANAGEMENT SCHEMA
+-- Rooms: G1, 2A, 2B, 3A, 3B, P1
 -- ========================================================
--- Copy and paste this entire script into your Supabase SQL Editor:
+-- Copy and paste this script into your Supabase SQL Editor:
 -- Dashboard -> SQL Editor -> New Query -> Run
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -9,6 +10,12 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- 1. Enums
 DO $$ BEGIN
     CREATE TYPE room_status AS ENUM ('VACANT', 'OCCUPIED', 'MAINTENANCE');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE tenant_type AS ENUM ('BACHELORS', 'FAMILY');
 EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
@@ -43,7 +50,7 @@ EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
 
--- 2. Rooms Table (5 Units)
+-- 2. Rooms Table (6 Units: G1, 2A, 2B, 3A, 3B, P1)
 CREATE TABLE IF NOT EXISTS public.rooms (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     room_number VARCHAR(20) NOT NULL UNIQUE,
@@ -51,6 +58,9 @@ CREATE TABLE IF NOT EXISTS public.rooms (
     base_rent NUMERIC(10, 2) NOT NULL,
     security_deposit NUMERIC(10, 2) NOT NULL DEFAULT 0.00,
     status room_status NOT NULL DEFAULT 'VACANT',
+    capacity INTEGER NOT NULL DEFAULT 2, -- Maximum bed/person capacity
+    current_occupancy INTEGER NOT NULL DEFAULT 0, -- Current occupants count
+    can_someone_get_in BOOLEAN NOT NULL DEFAULT true, -- Whether there's an opening/bed available
     notes TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
@@ -63,6 +73,11 @@ CREATE TABLE IF NOT EXISTS public.tenants (
     full_name VARCHAR(255) NOT NULL,
     phone VARCHAR(20) NOT NULL,
     email VARCHAR(255),
+    tenant_type tenant_type NOT NULL DEFAULT 'BACHELORS', -- BACHELORS or FAMILY
+    occupants JSONB DEFAULT '[]'::jsonb, -- Array of bachelor occupants: [{name, phone, occupation, organization, role_or_course, aadhar_number}]
+    family_members_count INTEGER DEFAULT 1,
+    primary_occupation VARCHAR(255),
+    college_or_company VARCHAR(255),
     emergency_contact_name VARCHAR(255) NOT NULL,
     emergency_contact_phone VARCHAR(20) NOT NULL,
     emergency_contact_relation VARCHAR(100) NOT NULL,
@@ -111,6 +126,7 @@ CREATE TABLE IF NOT EXISTS public.payments (
 -- 6. Indexes
 CREATE INDEX IF NOT EXISTS idx_tenants_room_id ON public.tenants(room_id);
 CREATE INDEX IF NOT EXISTS idx_tenants_status ON public.tenants(status);
+CREATE INDEX IF NOT EXISTS idx_tenants_tenant_type ON public.tenants(tenant_type);
 CREATE INDEX IF NOT EXISTS idx_documents_tenant_id ON public.documents(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_payments_tenant_id ON public.payments(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_payments_billing_period ON public.payments(billing_period_month);
@@ -141,9 +157,16 @@ CREATE OR REPLACE FUNCTION sync_room_occupancy()
 RETURNS TRIGGER AS $$
 BEGIN
     IF (NEW.status IN ('ACTIVE', 'NOTICE_PERIOD') AND NEW.room_id IS NOT NULL) THEN
-        UPDATE public.rooms SET status = 'OCCUPIED' WHERE id = NEW.room_id;
+        UPDATE public.rooms 
+        SET status = 'OCCUPIED', 
+            can_someone_get_in = (capacity > current_occupancy) 
+        WHERE id = NEW.room_id;
     ELSIF (NEW.status = 'MOVED_OUT' AND NEW.room_id IS NOT NULL) THEN
-        UPDATE public.rooms SET status = 'VACANT' WHERE id = NEW.room_id;
+        UPDATE public.rooms 
+        SET status = 'VACANT', 
+            can_someone_get_in = true, 
+            current_occupancy = 0 
+        WHERE id = NEW.room_id;
     END IF;
     RETURN NEW;
 END;
@@ -174,3 +197,19 @@ CREATE POLICY "Full access to documents" ON public.documents FOR ALL USING (true
 
 DROP POLICY IF EXISTS "Full access to payments" ON public.payments;
 CREATE POLICY "Full access to payments" ON public.payments FOR ALL USING (true);
+
+-- 9. Seed the 6 Rooms: G1, 2A, 2B, 3A, 3B, P1
+INSERT INTO public.rooms (room_number, floor, base_rent, security_deposit, status, capacity, current_occupancy, can_someone_get_in, notes) VALUES
+('G1', 0, 12000.00, 24000.00, 'VACANT', 2, 0, true, 'Ground floor unit, quiet entry, ideal for family or bachelors'),
+('2A', 2, 14000.00, 28000.00, 'VACANT', 3, 0, true, 'Second floor front facing, attached balcony, cross ventilation'),
+('2B', 2, 13500.00, 27000.00, 'VACANT', 2, 0, true, 'Second floor rear unit, peaceful with attached bathroom'),
+('3A', 3, 14500.00, 29000.00, 'VACANT', 3, 0, true, 'Third floor front facing, excellent sunlight and ventilation'),
+('3B', 3, 14000.00, 28000.00, 'VACANT', 2, 0, true, 'Third floor rear unit, attached bath and study corner'),
+('P1', 4, 18000.00, 36000.00, 'VACANT', 4, 0, true, 'Penthouse suite with private rooftop terrace access')
+ON CONFLICT (room_number) DO UPDATE SET
+    floor = EXCLUDED.floor,
+    base_rent = EXCLUDED.base_rent,
+    security_deposit = EXCLUDED.security_deposit,
+    capacity = EXCLUDED.capacity,
+    notes = EXCLUDED.notes;
+

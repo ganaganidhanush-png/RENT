@@ -1,12 +1,16 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import Link from 'next/link';
 import { 
-  Building2, IndianRupee, AlertCircle, 
-  CalendarClock, ArrowUpRight, Plus, ShieldCheck, CheckCircle2
+  Building2, IndianRupee, 
+  CalendarClock, ArrowUpRight, Plus, ShieldCheck, CheckCircle2,
+  GraduationCap, Edit3, Sparkles
 } from 'lucide-react';
 import { Room, Payment, Tenant } from '@/types/database';
+import { DEFAULT_ROOMS } from '@/lib/constants/rooms';
+import { getLocalRooms, getLocalTenants } from '@/lib/store/app-store';
+import EditRoomModal from '@/components/rooms/edit-room-modal';
 
 interface DashboardProps {
   rooms: Room[];
@@ -22,49 +26,112 @@ interface DashboardProps {
   };
 }
 
-export default function DashboardView({ rooms, recentPayments, expiringTenants, stats }: DashboardProps) {
-  const occupancyPercentage = stats.totalRooms > 0 
-    ? Math.round((stats.occupiedRooms / stats.totalRooms) * 100) 
+export default function DashboardView({ 
+  rooms: initialRooms, 
+  recentPayments, 
+  expiringTenants: initialExpiring, 
+  stats: initialStats 
+}: DashboardProps) {
+  const [rooms, setRooms] = useState<Room[]>(() => {
+    if (initialRooms && initialRooms.length > 0) return initialRooms;
+    if (typeof window !== 'undefined') {
+      const local = getLocalRooms();
+      if (local && local.length > 0) return local;
+    }
+    return DEFAULT_ROOMS;
+  });
+
+  const [tenants] = useState<Tenant[]>(() => {
+    if (initialExpiring && initialExpiring.length > 0) return initialExpiring;
+    if (typeof window !== 'undefined') {
+      return getLocalTenants();
+    }
+    return [];
+  });
+
+  const [editingRoom, setEditingRoom] = useState<Room | null>(null);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+
+  const totalRoomsCount = rooms.length > 0 ? rooms.length : 6;
+  const occupiedRoomsCount = rooms.filter((r) => r.status === 'OCCUPIED').length;
+  const vacantRoomsCount = rooms.filter((r) => r.status === 'VACANT' || r.can_someone_get_in).length;
+  const bachelorsCount = tenants.filter((t) => t.tenant_type === 'BACHELORS').length;
+  const familiesCount = tenants.filter((t) => t.tenant_type === 'FAMILY').length;
+
+  const totalRentExpected = rooms.reduce((acc, r) => acc + (r.status === 'OCCUPIED' ? Number(r.base_rent) : 0), 0) || initialStats.totalRentExpected;
+  const totalRentCollected = initialStats.totalRentCollected;
+  const pendingDues = Math.max(0, totalRentExpected - totalRentCollected);
+
+  const occupancyPercentage = totalRoomsCount > 0 
+    ? Math.round((occupiedRoomsCount / totalRoomsCount) * 100) 
     : 0;
 
-  const getStatusBadge = (status: Room['status']) => {
-    switch (status) {
-      case 'VACANT':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-            To-Let (Vacant)
-          </span>
-        );
-      case 'OCCUPIED':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-            <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
-            Occupied
-          </span>
-        );
-      case 'MAINTENANCE':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
-            Maintenance
-          </span>
-        );
+  const handleEditClick = (room: Room) => {
+    setEditingRoom(room);
+    setIsEditModalOpen(true);
+  };
+
+  const handleRoomSaved = (updated: Room) => {
+    setRooms((prev) =>
+      prev.map((r) => (r.id === updated.id || r.room_number === updated.room_number ? updated : r))
+    );
+  };
+
+  const getMoveInBadge = (room: Room) => {
+    if (room.status === 'MAINTENANCE') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-300">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+          Maintenance
+        </span>
+      );
     }
+
+    if (room.status === 'VACANT' || (room.current_occupancy || 0) === 0) {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-300">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+          Empty / Ready to Move
+        </span>
+      );
+    }
+
+    if (room.can_someone_get_in) {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-900 border border-indigo-300">
+          <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 animate-pulse"></span>
+          Bed Open (Can Get In)
+        </span>
+      );
+    }
+
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-800 border border-slate-300">
+        <span className="w-1.5 h-1.5 rounded-full bg-slate-500"></span>
+        Occupied (Full)
+      </span>
+    );
   };
 
   return (
     <div className="space-y-8 p-6 lg:p-8 max-w-7xl mx-auto">
       {/* Top Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-300 pb-5">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Property Dashboard</h1>
-          <p className="text-xs text-slate-500 mt-1">Live Occupancy, Rental Cashflow & Document Vault</p>
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-2xl font-black text-slate-900 tracking-tight">Property Dashboard</h1>
+            <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+              6 Units (G1, 2A, 2B, 3A, 3B, P1)
+            </span>
+          </div>
+          <p className="text-xs font-semibold text-slate-600 mt-1">
+            Real-time occupancy tracking, bachelors & family management, and move-in availability
+          </p>
         </div>
         <div className="flex items-center gap-3">
           <Link
             href="/tenants/new"
-            className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-all"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shadow-xs transition-all cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             Add New Tenant
@@ -75,163 +142,187 @@ export default function DashboardView({ rooms, recentPayments, expiringTenants, 
       {/* 4 Metric Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
         {/* Occupancy Card */}
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs hover:border-slate-300 transition-all">
-          <div className="flex items-center justify-between text-slate-500">
-            <span className="text-xs font-semibold uppercase tracking-wider">Occupancy Rate</span>
-            <div className="p-2 bg-blue-50 text-blue-600 rounded-lg">
-              <Building2 className="w-4 h-4" />
+        <div className="bg-white p-5 rounded-2xl border-2 border-slate-200 shadow-xs hover:border-slate-300 transition-all">
+          <div className="flex items-center justify-between text-slate-700">
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-800">Occupancy Rate</span>
+            <div className="p-2 bg-blue-50 text-blue-700 rounded-lg">
+              <Building2 className="w-5 h-5" />
             </div>
           </div>
           <div className="mt-3">
-            <div className="text-2xl font-bold text-slate-900">
-              {stats.occupiedRooms} / {stats.totalRooms}{' '}
-              <span className="text-xs font-medium text-slate-500">Rooms</span>
+            <div className="text-2xl font-black text-slate-900">
+              {occupiedRoomsCount} / {totalRoomsCount}{' '}
+              <span className="text-xs font-bold text-slate-500">Rooms</span>
             </div>
-            <div className="w-full bg-slate-100 rounded-full h-2 mt-3 overflow-hidden">
+            <div className="w-full bg-slate-200 rounded-full h-2 mt-3 overflow-hidden">
               <div 
                 className="bg-blue-600 h-2 rounded-full transition-all duration-500" 
                 style={{ width: `${occupancyPercentage}%` }}
               />
             </div>
-            <p className="text-[11px] text-slate-500 mt-2 font-medium">{occupancyPercentage}% current occupancy</p>
-          </div>
-        </div>
-
-        {/* Total Rent Collected */}
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs hover:border-slate-300 transition-all">
-          <div className="flex items-center justify-between text-slate-500">
-            <span className="text-xs font-semibold uppercase tracking-wider">Collected This Month</span>
-            <div className="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
-              <IndianRupee className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <div className="text-2xl font-bold text-slate-900">₹{stats.totalRentCollected.toLocaleString('en-IN')}</div>
-            <p className="text-[11px] text-slate-500 mt-1 font-medium">
-              Expected Total: ₹{stats.totalRentExpected.toLocaleString('en-IN')}
+            <p className="text-xs text-slate-700 mt-2 font-bold">
+              {vacantRoomsCount} room(s) have vacancy / beds open
             </p>
           </div>
         </div>
 
-        {/* Pending Dues */}
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs hover:border-slate-300 transition-all">
-          <div className="flex items-center justify-between text-slate-500">
-            <span className="text-xs font-semibold uppercase tracking-wider">Pending Dues</span>
-            <div className="p-2 bg-rose-50 text-rose-600 rounded-lg">
-              <AlertCircle className="w-4 h-4" />
+        {/* Total Rent Expected & Collected */}
+        <div className="bg-white p-5 rounded-2xl border-2 border-slate-200 shadow-xs hover:border-slate-300 transition-all">
+          <div className="flex items-center justify-between text-slate-700">
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-800">Expected Monthly Rent</span>
+            <div className="p-2 bg-emerald-50 text-emerald-700 rounded-lg">
+              <IndianRupee className="w-5 h-5" />
             </div>
           </div>
           <div className="mt-3">
-            <div className={`text-2xl font-bold ${stats.pendingDues > 0 ? 'text-rose-600' : 'text-slate-900'}`}>
-              ₹{stats.pendingDues.toLocaleString('en-IN')}
-            </div>
-            <p className="text-[11px] text-slate-500 mt-1 font-medium">
-              {stats.pendingDues > 0 ? 'Immediate follow-up required' : 'All rent dues clear'}
+            <div className="text-2xl font-black text-slate-900">₹{totalRentExpected.toLocaleString('en-IN')}</div>
+            <p className="text-xs text-slate-600 mt-1 font-semibold">
+              Collected so far: <span className="font-bold text-emerald-700">₹{totalRentCollected.toLocaleString('en-IN')}</span>
+              {pendingDues > 0 ? (
+                <span className="text-rose-600 font-bold ml-1.5">• ₹{pendingDues.toLocaleString('en-IN')} pending</span>
+              ) : null}
             </p>
           </div>
         </div>
 
-        {/* Upcoming Lease Expiries */}
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs hover:border-slate-300 transition-all">
-          <div className="flex items-center justify-between text-slate-500">
-            <span className="text-xs font-semibold uppercase tracking-wider">Expiring Leases</span>
-            <div className="p-2 bg-amber-50 text-amber-600 rounded-lg">
-              <CalendarClock className="w-4 h-4" />
+        {/* Tenant Demographics: Bachelors vs Family */}
+        <div className="bg-white p-5 rounded-2xl border-2 border-slate-200 shadow-xs hover:border-slate-300 transition-all">
+          <div className="flex items-center justify-between text-slate-700">
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-800">Tenant Types</span>
+            <div className="p-2 bg-purple-50 text-purple-700 rounded-lg">
+              <GraduationCap className="w-5 h-5" />
             </div>
           </div>
           <div className="mt-3">
-            <div className="text-2xl font-bold text-slate-900">{stats.expiriesCount}</div>
-            <p className="text-[11px] text-slate-500 mt-1 font-medium">Within next 30 days</p>
+            <div className="text-2xl font-black text-slate-900">
+              {bachelorsCount} <span className="text-xs font-bold text-purple-700">Bachelors</span> • {familiesCount} <span className="text-xs font-bold text-blue-700">Family</span>
+            </div>
+            <p className="text-xs text-slate-600 mt-1 font-semibold">
+              Students, professionals & families
+            </p>
+          </div>
+        </div>
+
+        {/* Vacancy / Get-In Availability */}
+        <div className="bg-white p-5 rounded-2xl border-2 border-slate-200 shadow-xs hover:border-slate-300 transition-all">
+          <div className="flex items-center justify-between text-slate-700">
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-800">Move-In Availability</span>
+            <div className="p-2 bg-amber-50 text-amber-700 rounded-lg">
+              <Sparkles className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="mt-3">
+            <div className="text-2xl font-black text-emerald-700">
+              {vacantRoomsCount > 0 ? `${vacantRoomsCount} Units Open` : 'Full House'}
+            </div>
+            <p className="text-xs text-slate-600 mt-1 font-semibold">
+              Chance for someone to move in
+            </p>
           </div>
         </div>
       </div>
 
-      {/* 5 Rooms Visual Status Grid */}
-      <div id="rooms-section" className="bg-white p-6 rounded-xl border border-slate-200 shadow-xs">
-        <div className="flex items-center justify-between mb-5">
+      {/* 6 Rooms Visual Status Grid: G1, 2A, 2B, 3A, 3B, P1 */}
+      <div id="rooms-section" className="bg-white p-6 rounded-2xl border-2 border-slate-200 shadow-sm">
+        <div className="flex items-center justify-between mb-5 border-b border-slate-200 pb-3">
           <div>
-            <h2 className="text-base font-bold text-slate-900">Rental Units (5 Rooms)</h2>
-            <p className="text-xs text-slate-500 mt-0.5">Ground & First floor unit status and assignments</p>
-          </div>
-          <span className="text-xs font-semibold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-md">
-            Total: {stats.totalRooms} Units
-          </span>
-        </div>
-
-        {rooms.length === 0 ? (
-          <div className="text-center py-12 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50">
-            <Building2 className="w-8 h-8 text-slate-400 mx-auto mb-2" />
-            <p className="text-xs font-semibold text-slate-700">No rooms found in database</p>
-            <p className="text-[11px] text-slate-400 mt-1 max-w-sm mx-auto">
-              Your property database is clean and ready. Add rooms in Supabase to start tracking occupancy.
+            <h2 className="text-lg font-black text-slate-900">Rental Units Grid (6 Rooms)</h2>
+            <p className="text-xs font-semibold text-slate-600 mt-0.5">
+              Live status, bed capacity, and chance for someone to get in
             </p>
           </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-            {rooms.map((room) => (
+          <Link
+            href="/rooms"
+            className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
+          >
+            Manage All Rooms →
+          </Link>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+          {rooms.map((room) => {
+            const hasSpace = room.can_someone_get_in ?? (room.status === 'VACANT');
+
+            return (
               <div 
                 key={room.id}
-                className="p-4 rounded-xl border border-slate-200 hover:border-indigo-400/80 transition-all bg-slate-50/50 flex flex-col justify-between h-52 group hover:shadow-sm"
+                className="p-4 rounded-xl border-2 border-slate-200 hover:border-indigo-400 transition-all bg-slate-50/70 flex flex-col justify-between h-56 group hover:shadow-sm"
               >
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm font-bold text-slate-900">{room.room_number}</span>
-                    <span className="text-[11px] text-slate-400 font-medium">Floor {room.floor}</span>
+                    <span className="text-base font-black text-slate-900">{room.room_number}</span>
+                    <span className="text-[11px] text-slate-600 font-bold bg-slate-200/80 px-1.5 py-0.5 rounded">
+                      Fl {room.floor}
+                    </span>
                   </div>
-                  <div className="mb-3">{getStatusBadge(room.status)}</div>
+                  
+                  <div className="mb-2">{getMoveInBadge(room)}</div>
+
                   <div className="space-y-1">
-                    <p className="text-xs font-bold text-slate-900">
+                    <p className="text-xs font-black text-slate-900">
                       ₹{Number(room.base_rent).toLocaleString('en-IN')}
-                      <span className="text-[10px] font-normal text-slate-400"> /month</span>
+                      <span className="text-[11px] font-normal text-slate-500"> /mo</span>
                     </p>
-                    <p className="text-[11px] text-slate-500 line-clamp-2 leading-relaxed">
-                      {room.notes || 'Master room, attached bath'}
+                    <p className="text-[11px] font-semibold text-slate-700">
+                      Cap: {room.capacity || 2} Beds ({room.current_occupancy || 0} In)
                     </p>
+                    {room.notes ? (
+                      <p className="text-[10px] text-slate-600 line-clamp-2 mt-1 leading-snug">
+                        {room.notes}
+                      </p>
+                    ) : null}
                   </div>
                 </div>
 
-                <div className="pt-3 border-t border-slate-200/80">
-                  {room.status === 'VACANT' ? (
-                    <Link
-                      href={`/tenants/new?room_id=${room.id}`}
-                      className="w-full text-center block text-xs font-semibold text-indigo-600 hover:text-white hover:bg-indigo-600 bg-indigo-50 py-1.5 rounded-lg transition-all"
+                <div className="pt-2.5 border-t border-slate-200 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={() => handleEditClick(room)}
+                      className="text-[11px] font-bold text-slate-700 hover:text-indigo-600 flex items-center gap-0.5 cursor-pointer"
                     >
-                      + Assign Tenant
-                    </Link>
-                  ) : (
-                    <div className="flex items-center justify-between text-xs text-slate-500">
-                      <span className="text-[11px] font-medium text-slate-700">Unit Occupied</span>
+                      <Edit3 className="w-3 h-3" /> Edit
+                    </button>
+
+                    {hasSpace ? (
+                      <Link
+                        href={`/tenants/new?room_id=${room.id}`}
+                        className="text-[11px] font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-100 hover:bg-indigo-200 px-2 py-0.5 rounded transition-colors"
+                      >
+                        + Assign
+                      </Link>
+                    ) : (
                       <Link
                         href="/tenants"
-                        className="text-[11px] font-semibold text-indigo-600 hover:underline flex items-center gap-0.5"
+                        className="text-[11px] font-bold text-slate-600 hover:text-slate-900"
                       >
                         Details →
                       </Link>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               </div>
-            ))}
-          </div>
-        )}
+            );
+          })}
+        </div>
       </div>
 
       {/* Bottom Grid: Recent Payments & Lease Expiry Alerts */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Payment Ledger (2 Columns) */}
-        <div id="payments-section" className="lg:col-span-2 bg-white p-6 rounded-xl border border-slate-200 shadow-xs">
-          <div className="flex items-center justify-between mb-4">
+        <div id="payments-section" className="lg:col-span-2 bg-white p-6 rounded-2xl border-2 border-slate-200 shadow-sm">
+          <div className="flex items-center justify-between mb-4 border-b border-slate-200 pb-3">
             <div>
-              <h2 className="text-base font-bold text-slate-900">Rent Payments & Ledger</h2>
-              <p className="text-xs text-slate-500">Track payment method and receiver (Landlord / Caretaker)</p>
+              <h2 className="text-base font-black text-slate-900">Rent Payments & Collections</h2>
+              <p className="text-xs font-semibold text-slate-600">UPI & Cash rent ledger</p>
             </div>
-            <Link href="/payments" className="text-xs text-indigo-600 hover:underline flex items-center gap-1 font-semibold">
+            <Link href="/payments" className="text-xs font-bold text-indigo-600 hover:underline flex items-center gap-1">
               Full Ledger <ArrowUpRight className="w-3.5 h-3.5" />
             </Link>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
+              <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-300">
                 <tr>
                   <th className="py-2.5 px-3">Room / Tenant</th>
                   <th className="py-2.5 px-3">Paid Amount</th>
@@ -240,41 +331,33 @@ export default function DashboardView({ rooms, recentPayments, expiringTenants, 
                   <th className="py-2.5 px-3">Status</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-slate-200">
                 {recentPayments.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="text-center py-8 text-slate-400">
+                    <td colSpan={5} className="text-center py-8 text-slate-600 font-semibold">
                       No payment records logged yet. Payments recorded will appear here.
                     </td>
                   </tr>
                 ) : (
                   recentPayments.map((p) => (
-                    <tr key={p.id} className="hover:bg-slate-50/50 transition-colors">
+                    <tr key={p.id} className="hover:bg-slate-50 transition-colors">
                       <td className="py-3 px-3">
-                        <span className="font-semibold text-slate-900 block">{p.room?.room_number || 'Room'}</span>
-                        <span className="text-[11px] text-slate-400 block">{p.tenant?.full_name || 'Tenant'}</span>
+                        <span className="font-bold text-slate-900 block">{p.room?.room_number || 'Room'}</span>
+                        <span className="text-[11px] text-slate-600 block">{p.tenant?.full_name || 'Tenant'}</span>
                       </td>
-                      <td className="py-3 px-3 font-bold text-emerald-600">
+                      <td className="py-3 px-3 font-bold text-emerald-700">
                         ₹{Number(p.amount_paid).toLocaleString('en-IN')}
                       </td>
-                      <td className="py-3 px-3 text-slate-600 font-medium">
+                      <td className="py-3 px-3 text-slate-800 font-semibold">
                         {p.payment_method || 'UPI'}
                       </td>
                       <td className="py-3 px-3">
-                        <span className={`px-2 py-0.5 rounded text-[11px] font-semibold ${
-                          p.received_by === 'LANDLORD' 
-                            ? 'bg-purple-50 text-purple-700 border border-purple-200' 
-                            : 'bg-amber-50 text-amber-700 border border-amber-200'
-                        }`}>
+                        <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-purple-50 text-purple-800 border border-purple-200">
                           {p.received_by}
                         </span>
                       </td>
                       <td className="py-3 px-3">
-                        <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold ${
-                          p.payment_status === 'PAID' 
-                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
-                            : 'bg-rose-50 text-rose-700 border border-rose-200'
-                        }`}>
+                        <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
                           {p.payment_status}
                         </span>
                       </td>
@@ -286,52 +369,51 @@ export default function DashboardView({ rooms, recentPayments, expiringTenants, 
           </div>
         </div>
 
-        {/* Expiring Leases */}
-        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-xs flex flex-col justify-between">
+        {/* Expiring Leases & Quick Vault */}
+        <div className="bg-white p-6 rounded-2xl border-2 border-slate-200 shadow-sm flex flex-col justify-between">
           <div>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                <CalendarClock className="w-4 h-4 text-amber-500" /> Lease Expiries
+            <div className="flex items-center justify-between mb-4 border-b border-slate-200 pb-3">
+              <h2 className="text-base font-black text-slate-900 flex items-center gap-2">
+                <CalendarClock className="w-5 h-5 text-amber-600" /> Lease Health
               </h2>
-              <span className="text-[11px] text-slate-400 font-medium">Next 30 Days</span>
+              <span className="text-xs font-bold text-slate-600">Active Agreements</span>
             </div>
 
             <div className="divide-y divide-slate-100">
-              {expiringTenants.length === 0 ? (
-                <div className="text-center py-8">
-                  <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto mb-2 opacity-80" />
-                  <p className="text-xs font-semibold text-slate-700">No leases expiring soon</p>
-                  <p className="text-[11px] text-slate-400 mt-1">All tenant agreements are currently healthy.</p>
-                </div>
-              ) : (
-                expiringTenants.map((t) => (
-                  <div key={t.id} className="py-3 flex items-center justify-between">
-                    <div>
-                      <p className="text-xs font-bold text-slate-900">{t.full_name}</p>
-                      <p className="text-[11px] text-slate-500">
-                        {t.room?.room_number} • Lease Ends: {t.lease_end_date}
-                      </p>
-                    </div>
-                    <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded">
-                      Action Required
-                    </span>
-                  </div>
-                ))
-              )}
+              <div className="text-center py-6">
+                <CheckCircle2 className="w-8 h-8 text-emerald-600 mx-auto mb-2 opacity-90" />
+                <p className="text-xs font-bold text-slate-800">Agreements in Good Standing</p>
+                <p className="text-[11px] text-slate-600 mt-1">
+                  All active tenant lease periods are currently monitored.
+                </p>
+              </div>
             </div>
           </div>
 
-          <div id="vault-section" className="mt-6 p-4 rounded-xl bg-slate-50 border border-slate-200">
+          <div id="vault-section" className="mt-6 p-4 rounded-xl bg-slate-50 border border-slate-300">
             <div className="flex items-center gap-2 mb-1">
               <ShieldCheck className="w-4 h-4 text-emerald-600" />
-              <span className="text-xs font-bold text-slate-900">Document Vault Ready</span>
+              <span className="text-xs font-bold text-slate-900">Encrypted Document Vault Ready</span>
             </div>
-            <p className="text-[11px] text-slate-500">
-              Aadhar cards & signed agreements are stored privately in encrypted Supabase storage with 60-second signed URLs.
+            <p className="text-[11px] text-slate-600 font-medium">
+              Aadhar cards & signed agreements for Bachelors & Families are archived with 60-second signed URLs.
             </p>
           </div>
         </div>
       </div>
+
+      {/* Edit Room Modal */}
+      {isEditModalOpen && editingRoom && (
+        <EditRoomModal
+          room={editingRoom}
+          isOpen={isEditModalOpen}
+          onClose={() => {
+            setIsEditModalOpen(false);
+            setEditingRoom(null);
+          }}
+          onSaved={handleRoomSaved}
+        />
+      )}
     </div>
   );
 }

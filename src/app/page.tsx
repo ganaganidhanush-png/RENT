@@ -30,6 +30,12 @@ export default async function DashboardPage() {
       totalRooms = dbRooms.length;
       occupiedRooms = dbRooms.filter((r) => r.status === 'OCCUPIED').length;
       totalRentExpected = dbRooms.reduce((acc, r) => acc + Number(r.base_rent || 0), 0);
+    } else {
+      const { DEFAULT_ROOMS } = await import('@/lib/constants/rooms');
+      rooms = DEFAULT_ROOMS;
+      totalRooms = DEFAULT_ROOMS.length;
+      occupiedRooms = 0;
+      totalRentExpected = DEFAULT_ROOMS.reduce((acc, r) => acc + Number(r.base_rent || 0), 0);
     }
 
     // 2. Fetch Recent Payments from Supabase

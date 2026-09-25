@@ -18,12 +18,12 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="h-full bg-slate-50 antialiased">
-      <body className={`${inter.className} min-h-full flex`}>
-        {/* Left Sidebar */}
+      <body className={`${inter.className} h-screen flex overflow-hidden`}>
+        {/* Left Sidebar (Fixed / Sticky) */}
         <Sidebar />
 
-        {/* Right Main Content Area */}
-        <div className="flex-1 flex flex-col min-w-0 min-h-screen">
+        {/* Right Main Content Area (Scrolls independently) */}
+        <div className="flex-1 flex flex-col min-w-0 h-screen overflow-hidden">
           <Header />
           <main className="flex-1 overflow-y-auto">
             {children}
