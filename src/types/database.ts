@@ -3,8 +3,9 @@ export type TenantStatus = 'ACTIVE' | 'NOTICE_PERIOD' | 'MOVED_OUT';
 export type TenantType = 'BACHELORS' | 'FAMILY';
 export type DocumentType = 'AADHAR_CARD' | 'RENTAL_AGREEMENT' | 'TENANT_PHOTO' | 'POLICE_VERIFICATION' | 'ELECTRICITY_BILL' | 'OTHER';
 export type PaymentMethod = 'UPI' | 'CASH' | 'BANK_TRANSFER' | 'CHEQUE';
-export type PaymentReceiver = 'LANDLORD' | 'CARETAKER' | 'MANAGER';
+export type PaymentReceiver = 'LANDLORD' | 'CARETAKER' | 'MANAGER' | (string & {});
 export type PaymentStatus = 'PAID' | 'PARTIAL' | 'PENDING' | 'OVERDUE';
+export type PaymentType = 'RENT' | 'MAINTENANCE' | 'SECURITY_DEPOSIT' | 'ELECTRICITY' | 'OTHER';
 
 export interface BachelorOccupant {
   id?: string;
@@ -84,6 +85,7 @@ export interface Payment {
   payment_date: string | null;
   payment_method: PaymentMethod | null;
   received_by: PaymentReceiver;
+  payment_type?: PaymentType;
   transaction_ref?: string | null;
   notes?: string | null;
   created_at?: string;

@@ -174,10 +174,18 @@ export function getLocalPayments(): Payment[] {
 export function saveLocalPayment(payment: Payment): Payment[] {
   const payments = getLocalPayments();
   const targetMonth = (payment.billing_period_month || '').slice(0, 7);
+  const targetType = payment.payment_type || 'RENT';
   const index = payments.findIndex((p) => {
     if (p.id === payment.id) return true;
     const pMonth = (p.billing_period_month || '').slice(0, 7);
-    return Boolean(p.tenant_id && p.tenant_id === payment.tenant_id && targetMonth && pMonth === targetMonth);
+    const pType = p.payment_type || 'RENT';
+    return Boolean(
+      p.tenant_id &&
+      p.tenant_id === payment.tenant_id &&
+      targetMonth &&
+      pMonth === targetMonth &&
+      pType === targetType
+    );
   });
   let newPayments: Payment[];
   if (index >= 0) {

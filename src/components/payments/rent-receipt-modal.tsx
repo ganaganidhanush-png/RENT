@@ -1,8 +1,8 @@
 'use client';
 
 import React from 'react';
-import { X, Printer, Share2, CheckCircle2, Building2, User, Calendar, IndianRupee } from 'lucide-react';
-import { Payment } from '@/types/database';
+import { X, Printer, Share2, CheckCircle2, Building2, User, Calendar, IndianRupee, FileText } from 'lucide-react';
+import { Payment, PaymentType } from '@/types/database';
 import { getLandlordProfile } from '@/lib/store/app-store';
 
 interface RentReceiptModalProps {
@@ -24,24 +24,38 @@ export default function RentReceiptModal({ payment, isOpen, onClose }: RentRecei
   const roomNumber = payment.room?.room_number || (payment.tenant?.room?.room_number ?? 'Unit');
   const billingMonth = payment.billing_month || payment.billing_period_month || 'Current Month';
 
+  const getCategoryLabel = (type?: PaymentType) => {
+    switch (type) {
+      case 'MAINTENANCE': return 'Maintenance';
+      case 'SECURITY_DEPOSIT': return 'Security Deposit / Advance';
+      case 'ELECTRICITY': return 'Electricity Bill';
+      case 'OTHER': return 'Payment Particulars';
+      case 'RENT':
+      default: return 'Monthly Rent';
+    }
+  };
+
+  const categoryLabel = getCategoryLabel(payment.payment_type);
+
   const handlePrint = () => {
     window.print();
   };
 
   const handleWhatsAppShare = () => {
-    const text = `*RENT RECEIPT - ${profile.propertyName || 'RentVault Property'}*
+    const text = `*PAYMENT RECEIPT - ${profile.propertyName || 'RentVault Property'}*
 --------------------------------
 *Receipt No:* ${receiptNo}
+*Purpose / Type:* ${categoryLabel}
 *Date:* ${payment.payment_date || new Date().toLocaleDateString('en-IN')}
 *Tenant:* ${tenantName}
 *Room:* Room ${roomNumber}
-*Billing Month:* ${billingMonth}
+*Period:* ${billingMonth}
 --------------------------------
 *Amount Paid:* ₹${amountPaidNum.toLocaleString('en-IN')}
 *Amount Due:* ₹${amountDueNum.toLocaleString('en-IN')}
 *Status:* ${payment.payment_status}
 *Payment Mode:* ${payment.payment_method || 'UPI'}
-${payment.transaction_ref ? `*Ref / UTR:* ${payment.transaction_ref}\n` : ''}*Received By:* ${payment.received_by || profile.name || 'Landlord'}
+${payment.transaction_ref ? `*Ref / UTR:* ${payment.transaction_ref}\n` : ''}${payment.notes ? `*Notes:* ${payment.notes}\n` : ''}*Received By:* ${payment.received_by || profile.name || 'Landlord'}
 --------------------------------
 Thank you for your payment!`;
 
@@ -58,7 +72,9 @@ Thank you for your payment!`;
         <div className="px-6 py-3.5 bg-slate-900 text-white flex items-center justify-between print:hidden">
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-200">Official Rent Receipt</span>
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-200">
+              Official {categoryLabel} Receipt
+            </span>
           </div>
           <button
             type="button"
@@ -94,12 +110,14 @@ Thank you for your payment!`;
 
           {/* Amount Paid Callout */}
           <div className="p-4 bg-emerald-50/70 border border-emerald-200 rounded-xl text-center">
-            <span className="text-xs font-bold text-emerald-900 uppercase tracking-wider block">Rent Amount Received</span>
+            <span className="text-xs font-bold text-emerald-900 uppercase tracking-wider block">
+              {categoryLabel} Received
+            </span>
             <span className="text-3xl font-black text-emerald-700 block mt-1">
               ₹{amountPaidNum.toLocaleString('en-IN')}
             </span>
             <span className="text-[11px] text-emerald-800 font-medium block mt-0.5">
-              Billing Month: {billingMonth}
+              Period / Month: {billingMonth}
             </span>
           </div>
 
@@ -114,7 +132,8 @@ Thank you for your payment!`;
 
             <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
               <span className="text-[10px] font-bold uppercase text-slate-400 block">Payment Particulars</span>
-              <p className="font-bold text-slate-900">Mode: {payment.payment_method || 'UPI'}</p>
+              <p className="font-bold text-slate-900">Type: {categoryLabel}</p>
+              <p className="text-slate-600 font-medium">Mode: {payment.payment_method || 'UPI'}</p>
               <p className="text-slate-600 font-medium">
                 Date: {payment.payment_date ? new Date(payment.payment_date).toLocaleDateString('en-IN') : 'N/A'}
               </p>
@@ -124,10 +143,20 @@ Thank you for your payment!`;
             </div>
           </div>
 
+          {/* Notes & Remarks (if provided) */}
+          {payment.notes && (
+            <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl text-xs space-y-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-amber-900 flex items-center gap-1">
+                <FileText className="w-3 h-3 text-amber-700" /> Notes & Remarks
+              </span>
+              <p className="font-semibold text-slate-800 leading-relaxed">{payment.notes}</p>
+            </div>
+          )}
+
           {/* Financial Breakdown */}
           <div className="p-3 border border-slate-200 rounded-xl space-y-1.5 text-xs text-slate-700">
             <div className="flex justify-between">
-              <span>Total Monthly Rent Due:</span>
+              <span>Total {categoryLabel} Due:</span>
               <span className="font-semibold text-slate-900">₹{amountDueNum.toLocaleString('en-IN')}</span>
             </div>
             <div className="flex justify-between">

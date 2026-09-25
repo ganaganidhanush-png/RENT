@@ -50,6 +50,12 @@ EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
 
+DO $$ BEGIN
+    CREATE TYPE payment_category AS ENUM ('RENT', 'MAINTENANCE', 'SECURITY_DEPOSIT', 'ELECTRICITY', 'OTHER');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
 -- 2. Rooms Table (6 Units: G1, 2A, 2B, 3A, 3B, P1)
 CREATE TABLE IF NOT EXISTS public.rooms (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -116,7 +122,8 @@ CREATE TABLE IF NOT EXISTS public.payments (
     payment_status payment_status NOT NULL DEFAULT 'PENDING',
     payment_date TIMESTAMPTZ,
     payment_method payment_method,
-    received_by payment_receiver NOT NULL DEFAULT 'LANDLORD',
+    received_by VARCHAR(100) NOT NULL DEFAULT 'LANDLORD',
+    payment_type VARCHAR(50) NOT NULL DEFAULT 'RENT',
     transaction_ref VARCHAR(100),
     notes TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),

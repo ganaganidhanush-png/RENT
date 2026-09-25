@@ -5,9 +5,9 @@ import Link from 'next/link';
 import { 
   Building2, IndianRupee, 
   CalendarClock, ArrowUpRight, Plus, ShieldCheck, CheckCircle2,
-  GraduationCap, Edit3, Sparkles
+  GraduationCap, Edit3, Sparkles, FileText
 } from 'lucide-react';
-import { Room, Payment, Tenant } from '@/types/database';
+import { Room, Payment, Tenant, PaymentType } from '@/types/database';
 import { DEFAULT_ROOMS } from '@/lib/constants/rooms';
 import { getLocalRooms, getLocalTenants, getLocalPayments } from '@/lib/store/app-store';
 import EditRoomModal from '@/components/rooms/edit-room-modal';
@@ -376,6 +376,7 @@ export default function DashboardView({
                                 id: `pay-${Date.now()}`,
                                 tenant_id: primaryTenant.id,
                                 room_id: room.id,
+                                payment_type: 'RENT',
                                 billing_period_month: currentMonthIso,
                                 billing_month: monthStr,
                                 amount_due: Number(primaryTenant.monthly_rent || room.base_rent),
@@ -443,6 +444,7 @@ export default function DashboardView({
               <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-300">
                 <tr>
                   <th className="py-2.5 px-3">Room / Tenant</th>
+                  <th className="py-2.5 px-3">Type</th>
                   <th className="py-2.5 px-3">Month</th>
                   <th className="py-2.5 px-3">Paid Amount</th>
                   <th className="py-2.5 px-3">Method</th>
@@ -453,55 +455,80 @@ export default function DashboardView({
               <tbody className="divide-y divide-slate-200">
                 {payments.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="text-center py-8 text-slate-600 font-semibold">
+                    <td colSpan={7} className="text-center py-8 text-slate-600 font-semibold">
                       No payment records logged yet. Click &quot;Record Payment&quot; above to log an entry.
                     </td>
                   </tr>
                 ) : (
-                  payments.slice(0, 6).map((p) => (
-                    <tr key={p.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="py-3 px-3">
-                        <span className="font-bold text-slate-900 block">{p.room?.room_number || 'Room'}</span>
-                        <span className="text-[11px] text-slate-600 block">{p.tenant?.full_name || 'Tenant'}</span>
-                      </td>
-                      <td className="py-3 px-3 text-slate-700 font-medium">
-                        {p.billing_month || 'Current'}
-                      </td>
-                      <td className="py-3 px-3 font-bold text-emerald-700">
-                        ₹{Number(p.amount_paid).toLocaleString('en-IN')}
-                        {Number(p.amount_pending) > 0 ? (
-                          <span className="text-[10px] text-rose-600 block font-normal">
-                            ₹{Number(p.amount_pending).toLocaleString('en-IN')} due
+                  payments.slice(0, 6).map((p) => {
+                    const pType = p.payment_type || 'RENT';
+                    const badgeLabel = 
+                      pType === 'MAINTENANCE' ? '🛠️ Maint' :
+                      pType === 'SECURITY_DEPOSIT' ? '🔐 Deposit' :
+                      pType === 'ELECTRICITY' ? '⚡ EB' :
+                      pType === 'OTHER' ? '📝 Misc' : '🏠 Rent';
+                    const badgeStyle = 
+                      pType === 'MAINTENANCE' ? 'bg-amber-100 text-amber-900 border-amber-300' :
+                      pType === 'SECURITY_DEPOSIT' ? 'bg-purple-100 text-purple-900 border-purple-300' :
+                      pType === 'ELECTRICITY' ? 'bg-cyan-100 text-cyan-900 border-cyan-300' :
+                      pType === 'OTHER' ? 'bg-slate-100 text-slate-800 border-slate-300' : 'bg-indigo-50 text-indigo-900 border-indigo-200';
+
+                    return (
+                      <tr key={p.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="py-3 px-3">
+                          <span className="font-bold text-slate-900 block">{p.room?.room_number || 'Room'}</span>
+                          <span className="text-[11px] text-slate-600 block">{p.tenant?.full_name || 'Tenant'}</span>
+                          {p.notes && (
+                            <div className="mt-0.5 flex items-center gap-1 text-[10px] font-medium text-slate-500 truncate max-w-[150px]" title={p.notes}>
+                              <FileText className="w-2.5 h-2.5 text-slate-400 shrink-0" />
+                              <span className="truncate">{p.notes}</span>
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3 px-3">
+                          <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold border ${badgeStyle}`}>
+                            {badgeLabel}
                           </span>
-                        ) : null}
-                      </td>
-                      <td className="py-3 px-3 text-slate-800 font-semibold">
-                        {p.payment_method || 'UPI'}
-                      </td>
-                      <td className="py-3 px-3">
-                        <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
-                          p.payment_status === 'PAID'
-                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                            : 'bg-amber-100 text-amber-800 border border-amber-300'
-                        }`}>
-                          {p.payment_status}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3 text-right">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingPayment(p);
-                            setIsPaymentModalOpen(true);
-                          }}
-                          className="p-1.5 rounded-md text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 transition-colors cursor-pointer"
-                          title="Edit Payment"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))
+                        </td>
+                        <td className="py-3 px-3 text-slate-700 font-medium">
+                          {p.billing_month || 'Current'}
+                        </td>
+                        <td className="py-3 px-3 font-bold text-emerald-700">
+                          ₹{Number(p.amount_paid).toLocaleString('en-IN')}
+                          {Number(p.amount_pending) > 0 ? (
+                            <span className="text-[10px] text-rose-600 block font-normal">
+                              ₹{Number(p.amount_pending).toLocaleString('en-IN')} due
+                            </span>
+                          ) : null}
+                        </td>
+                        <td className="py-3 px-3 text-slate-800 font-semibold">
+                          {p.payment_method || 'UPI'}
+                        </td>
+                        <td className="py-3 px-3">
+                          <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                            p.payment_status === 'PAID'
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                              : 'bg-amber-100 text-amber-800 border border-amber-300'
+                          }`}>
+                            {p.payment_status}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingPayment(p);
+                              setIsPaymentModalOpen(true);
+                            }}
+                            className="p-1.5 rounded-md text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 transition-colors cursor-pointer"
+                            title="Edit Payment"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>

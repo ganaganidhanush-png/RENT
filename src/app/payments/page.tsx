@@ -4,9 +4,10 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { 
   ArrowLeft, Plus, Edit3, Trash2, 
-  CheckCircle2, AlertCircle, RefreshCw, CreditCard, Receipt 
+  CheckCircle2, AlertCircle, RefreshCw, CreditCard, Receipt,
+  Tag, FileText
 } from 'lucide-react';
-import { Payment } from '@/types/database';
+import { Payment, PaymentType } from '@/types/database';
 import { getLocalPayments, saveLocalPayment, deleteLocalPayment } from '@/lib/store/app-store';
 import { createClient } from '@/lib/supabase/client';
 import RecordPaymentModal from '@/components/payments/record-payment-modal';
@@ -17,6 +18,7 @@ export default function PaymentsPage() {
     if (typeof window !== 'undefined') return getLocalPayments();
     return [];
   });
+  const [categoryFilter, setCategoryFilter] = useState<'ALL' | PaymentType>('ALL');
   const [editingPayment, setEditingPayment] = useState<Payment | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [receiptPayment, setReceiptPayment] = useState<Payment | null>(null);
@@ -31,7 +33,9 @@ export default function PaymentsPage() {
         const sameRoom = m.room_id === lp.room_id;
         const mMonth = (m.billing_period_month || '').slice(0, 7);
         const lpMonth = (lp.billing_period_month || '').slice(0, 7);
-        return sameTenant && sameRoom && mMonth === lpMonth && mMonth !== '';
+        const mType = m.payment_type || 'RENT';
+        const lpType = lp.payment_type || 'RENT';
+        return sameTenant && sameRoom && mMonth === lpMonth && mMonth !== '' && mType === lpType;
       });
       if (!alreadyExists) {
         merged.push(lp);
@@ -154,9 +158,55 @@ export default function PaymentsPage() {
     }
   };
 
-  const totalCollected = payments.reduce((acc, p) => acc + Number(p.amount_paid || 0), 0);
-  const totalPending = payments.reduce((acc, p) => acc + Number(p.amount_pending || 0), 0);
-  const totalDue = payments.reduce((acc, p) => acc + Number(p.amount_due || 0), 0);
+  const rentCount = payments.filter((p) => (p.payment_type || 'RENT') === 'RENT').length;
+  const maintCount = payments.filter((p) => p.payment_type === 'MAINTENANCE').length;
+  const depositCount = payments.filter((p) => p.payment_type === 'SECURITY_DEPOSIT').length;
+  const elecCount = payments.filter((p) => p.payment_type === 'ELECTRICITY').length;
+  const otherCount = payments.filter((p) => p.payment_type === 'OTHER').length;
+
+  const filteredPayments = categoryFilter === 'ALL'
+    ? payments
+    : payments.filter((p) => (p.payment_type || 'RENT') === categoryFilter);
+
+  const totalCollected = filteredPayments.reduce((acc, p) => acc + Number(p.amount_paid || 0), 0);
+  const totalPending = filteredPayments.reduce((acc, p) => acc + Number(p.amount_pending || 0), 0);
+  const totalDue = filteredPayments.reduce((acc, p) => acc + Number(p.amount_due || 0), 0);
+
+  const getCategoryBadge = (type?: PaymentType) => {
+    switch (type) {
+      case 'MAINTENANCE':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-50 text-amber-900 border border-amber-300">
+            🛠️ Maintenance
+          </span>
+        );
+      case 'SECURITY_DEPOSIT':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-50 text-purple-900 border border-purple-300">
+            🔐 Advance / Deposit
+          </span>
+        );
+      case 'ELECTRICITY':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-cyan-50 text-cyan-900 border border-cyan-300">
+            ⚡ Electricity
+          </span>
+        );
+      case 'OTHER':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-800 border border-slate-300">
+            📝 Other
+          </span>
+        );
+      case 'RENT':
+      default:
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-50 text-indigo-900 border border-indigo-200">
+            🏠 Rent
+          </span>
+        );
+    }
+  };
 
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
@@ -170,9 +220,9 @@ export default function PaymentsPage() {
             <ArrowLeft className="w-4 h-4" />
           </Link>
           <div>
-            <h1 className="text-xl font-bold text-slate-900 tracking-tight">Rent Payment Ledger</h1>
+            <h1 className="text-xl font-bold text-slate-900 tracking-tight">Payment Ledger</h1>
             <p className="text-xs font-semibold text-slate-600 mt-0.5">
-              Live rent receipts, dues, UPI / Cash transaction records, and editable ledger entries
+              Live rent receipts, maintenance, advance deposits, utility bills, and payment records
             </p>
           </div>
         </div>
@@ -190,24 +240,60 @@ export default function PaymentsPage() {
       {/* Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="p-5 bg-white border-2 border-slate-200 rounded-2xl shadow-xs">
-          <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Total Billed Due</span>
+          <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+            {categoryFilter === 'ALL' ? 'Total Billed Due' : `${categoryFilter} Due`}
+          </span>
           <p className="text-2xl font-black text-slate-900 mt-1">₹{totalDue.toLocaleString('en-IN')}</p>
         </div>
         <div className="p-5 bg-white border-2 border-slate-200 rounded-2xl shadow-xs">
-          <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider">Total Collections Received</span>
+          <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider">
+            {categoryFilter === 'ALL' ? 'Total Collected Received' : `${categoryFilter} Collected`}
+          </span>
           <p className="text-2xl font-black text-emerald-700 mt-1">₹{totalCollected.toLocaleString('en-IN')}</p>
         </div>
         <div className="p-5 bg-white border-2 border-slate-200 rounded-2xl shadow-xs">
-          <span className="text-xs font-bold text-rose-800 uppercase tracking-wider">Outstanding Dues</span>
+          <span className="text-xs font-bold text-rose-800 uppercase tracking-wider">
+            {categoryFilter === 'ALL' ? 'Outstanding Dues' : `${categoryFilter} Pending`}
+          </span>
           <p className="text-2xl font-black text-rose-700 mt-1">₹{totalPending.toLocaleString('en-IN')}</p>
         </div>
+      </div>
+
+      {/* Category Filter Tabs */}
+      <div className="flex flex-wrap items-center gap-2">
+        {[
+          { id: 'ALL', label: 'All Transactions', count: payments.length },
+          { id: 'RENT', label: '🏠 Rent', count: rentCount },
+          { id: 'MAINTENANCE', label: '🛠️ Maintenance', count: maintCount },
+          { id: 'SECURITY_DEPOSIT', label: '🔐 Advance / Deposit', count: depositCount },
+          { id: 'ELECTRICITY', label: '⚡ Electricity', count: elecCount },
+          { id: 'OTHER', label: '📝 Other', count: otherCount },
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setCategoryFilter(tab.id as 'ALL' | PaymentType)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+              categoryFilter === tab.id
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            <span>{tab.label}</span>
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${
+              categoryFilter === tab.id ? 'bg-slate-800 text-slate-200' : 'bg-slate-100 text-slate-600'
+            }`}>
+              {tab.count}
+            </span>
+          </button>
+        ))}
       </div>
 
       {/* Table */}
       <div className="bg-white border-2 border-slate-200 rounded-2xl shadow-sm overflow-hidden">
         <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
           <h2 className="text-xs font-bold uppercase tracking-wider text-slate-800">
-            Payment Transactions ({payments.length})
+            Payment Transactions ({filteredPayments.length})
           </h2>
           <button
             type="button"
@@ -223,6 +309,7 @@ export default function PaymentsPage() {
             <thead className="bg-slate-100 text-slate-800 font-bold border-b border-slate-300">
               <tr>
                 <th className="py-3 px-4">Room & Tenant</th>
+                <th className="py-3 px-4">Type / Purpose</th>
                 <th className="py-3 px-4">Billing Month</th>
                 <th className="py-3 px-4">Amount Due</th>
                 <th className="py-3 px-4">Amount Paid</th>
@@ -234,23 +321,27 @@ export default function PaymentsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
-              {payments.length === 0 ? (
+              {filteredPayments.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="text-center py-16 text-slate-600 font-semibold">
+                  <td colSpan={10} className="text-center py-16 text-slate-600 font-semibold">
                     <CreditCard className="w-10 h-10 text-slate-400 mx-auto mb-2" />
-                    <p className="text-sm font-bold text-slate-900">No payment transactions recorded yet</p>
-                    <p className="text-xs text-slate-500 mt-1">Click below to record your first rent collection or receipt</p>
+                    <p className="text-sm font-bold text-slate-900">
+                      {categoryFilter === 'ALL'
+                        ? 'No payment transactions recorded yet'
+                        : `No ${categoryFilter} records logged yet`}
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1">Click below to record a payment or receipt</p>
                     <button
                       type="button"
                       onClick={handleNewClick}
                       className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors cursor-pointer"
                     >
-                      <Plus className="w-4 h-4" /> Record Rent Payment
+                      <Plus className="w-4 h-4" /> Record Payment
                     </button>
                   </td>
                 </tr>
               ) : (
-                payments.map((p) => {
+                filteredPayments.map((p) => {
                   const isPaid = p.payment_status === 'PAID';
                   const isPending = p.payment_status === 'PENDING';
 
@@ -263,6 +354,15 @@ export default function PaymentsPage() {
                         <span className="text-[11px] text-slate-600 font-semibold block">
                           {p.tenant?.full_name || 'Tenant'}
                         </span>
+                        {p.notes && (
+                          <div className="mt-1 flex items-start gap-1 text-[11px] font-medium text-slate-600 bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5 max-w-xs">
+                            <FileText className="w-3 h-3 text-slate-400 shrink-0 mt-0.5" />
+                            <span className="truncate" title={p.notes}>{p.notes}</span>
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-3.5 px-4">
+                        {getCategoryBadge(p.payment_type)}
                       </td>
                       <td className="py-3.5 px-4 text-slate-700 font-bold">{p.billing_period_month}</td>
                       <td className="py-3.5 px-4 font-bold text-slate-900">
@@ -315,7 +415,7 @@ export default function PaymentsPage() {
                               type="button"
                               onClick={() => handleQuickMarkPaid(p)}
                               className="px-2 py-1 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-[11px] font-bold border border-emerald-200 transition-colors"
-                              title="Mark full rent as paid"
+                              title="Mark full amount as paid"
                             >
                               Mark Paid
                             </button>

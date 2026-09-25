@@ -3,11 +3,28 @@
 import React, { useState } from 'react';
 import { 
   X, IndianRupee, User, Building2, Calendar, 
-  CheckCircle2, Save, CreditCard
+  CheckCircle2, Save, CreditCard, Tag, FileText, UserCheck
 } from 'lucide-react';
-import { Payment, Tenant, Room, PaymentMethod, PaymentStatus, PaymentReceiver } from '@/types/database';
-import { getLocalTenants, getLocalRooms, saveLocalPayment } from '@/lib/store/app-store';
+import { Payment, Tenant, Room, PaymentMethod, PaymentStatus, PaymentReceiver, PaymentType } from '@/types/database';
+import { getLocalTenants, getLocalRooms, saveLocalPayment, getLandlordProfile } from '@/lib/store/app-store';
 import { createClient } from '@/lib/supabase/client';
+
+const CATEGORY_OPTIONS: { value: PaymentType; label: string; icon: string; desc: string }[] = [
+  { value: 'RENT', label: 'Rent', icon: '🏠', desc: 'Monthly stay' },
+  { value: 'MAINTENANCE', label: 'Maintenance', icon: '🛠️', desc: 'Water, cleaning, lift' },
+  { value: 'SECURITY_DEPOSIT', label: 'Advance / Deposit', icon: '🔐', desc: 'Move-in security' },
+  { value: 'ELECTRICITY', label: 'Electricity', icon: '⚡', desc: 'EB meter units' },
+  { value: 'OTHER', label: 'Other', icon: '📝', desc: 'Miscellaneous' },
+];
+
+const QUICK_NOTE_TAGS = [
+  'Monthly Rent',
+  'Maintenance (Water/Lift)',
+  'Move-in Advance Deposit',
+  'EB Meter Bill',
+  'Full Settlement',
+  'Partial Payment (Balance Pending)',
+];
 
 interface RecordPaymentModalProps {
   payment?: Payment | null;
@@ -55,13 +72,17 @@ export default function RecordPaymentModal({
   const initialRoomId = payment?.room_id || preselectedRoomId || (initialTenant?.room_id || rooms[0]?.id || '');
   const initialDue = payment?.amount_due !== undefined ? payment.amount_due : (initialTenant?.monthly_rent || 0);
 
+  const profile = getLandlordProfile();
+  const defaultReceiver = profile.name ? `${profile.name} (Owner)` : 'Landlord';
+
+  const [paymentType, setPaymentType] = useState<PaymentType>(() => payment?.payment_type || 'RENT');
   const [selectedRoomId, setSelectedRoomId] = useState(initialRoomId);
   const [billingMonthYear, setBillingMonthYear] = useState(initialYearMonth);
   const [amountDue, setAmountDue] = useState(() => String(initialDue));
   const [amountPaid, setAmountPaid] = useState(() => String(payment?.amount_paid ?? initialDue));
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(() => payment?.payment_method || 'UPI');
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>(() => payment?.payment_status || 'PAID');
-  const [receivedBy, setReceivedBy] = useState<PaymentReceiver>(() => payment?.received_by || 'LANDLORD');
+  const [receivedBy, setReceivedBy] = useState<PaymentReceiver>(() => payment?.received_by || defaultReceiver);
   const [transactionRef, setTransactionRef] = useState(() => payment?.transaction_ref || '');
   const [paymentDate, setPaymentDate] = useState(() => payment?.payment_date || new Date().toISOString().split('T')[0]);
   const [notes, setNotes] = useState(() => payment?.notes || '');
@@ -71,15 +92,58 @@ export default function RecordPaymentModal({
 
   if (!isOpen) return null;
 
+  // Handle switching payment category with intelligent auto-fill
+  const handleCategoryChange = (newType: PaymentType) => {
+    setPaymentType(newType);
+    const activeTenant = tenants.find((t) => t.id === selectedTenantId);
+    
+    if (newType === 'RENT') {
+      const rent = activeTenant?.monthly_rent || 0;
+      if (rent > 0) {
+        setAmountDue(String(rent));
+        setAmountPaid(String(rent));
+      }
+      if (!notes || notes.includes('Advance') || notes.includes('Maintenance')) {
+        setNotes('Monthly Rent');
+      }
+    } else if (newType === 'MAINTENANCE') {
+      if (!amountDue || amountDue === String(activeTenant?.monthly_rent)) {
+        setAmountDue('1000');
+        setAmountPaid('1000');
+      }
+      setNotes('Monthly Maintenance (Water & Cleaning)');
+    } else if (newType === 'SECURITY_DEPOSIT') {
+      const dep = activeTenant?.security_deposit_paid || (activeTenant?.monthly_rent ? activeTenant.monthly_rent * 2 : 20000);
+      setAmountDue(String(dep));
+      setAmountPaid(String(dep));
+      setNotes('Move-in Security Deposit / Advance Payment');
+    } else if (newType === 'ELECTRICITY') {
+      if (!notes) setNotes('EB Electricity Bill (Meter units)');
+    }
+  };
+
+  const handleAppendNote = (tag: string) => {
+    setNotes((prev) => {
+      const trimmed = prev.trim();
+      if (!trimmed) return tag;
+      if (trimmed.includes(tag)) return trimmed;
+      return `${trimmed} • ${tag}`;
+    });
+  };
+
   // When user changes tenant, automatically fill their room & monthly rent
   const handleTenantSelect = (tenantId: string) => {
     setSelectedTenantId(tenantId);
     const chosen = tenants.find((t) => t.id === tenantId);
     if (chosen) {
       if (chosen.room_id) setSelectedRoomId(chosen.room_id);
-      if (chosen.monthly_rent) {
+      if (paymentType === 'RENT' && chosen.monthly_rent) {
         setAmountDue(String(chosen.monthly_rent));
         setAmountPaid(String(chosen.monthly_rent));
+      } else if (paymentType === 'SECURITY_DEPOSIT') {
+        const dep = chosen.security_deposit_paid || (chosen.monthly_rent ? chosen.monthly_rent * 2 : 20000);
+        setAmountDue(String(dep));
+        setAmountPaid(String(dep));
       }
     }
   };
@@ -105,6 +169,7 @@ export default function RecordPaymentModal({
       id: finalPaymentId,
       tenant_id: selectedTenantId,
       room_id: selectedRoomId,
+      payment_type: paymentType,
       billing_period_month: isoBillingPeriod,
       billing_month: billingDisplay,
       amount_due: dueNum,
@@ -131,6 +196,7 @@ export default function RecordPaymentModal({
       const payload: Record<string, unknown> = {
         tenant_id: paymentRecord.tenant_id,
         room_id: paymentRecord.room_id,
+        payment_type: paymentRecord.payment_type || 'RENT',
         billing_period_month: isoBillingPeriod,
         amount_due: paymentRecord.amount_due,
         amount_paid: paymentRecord.amount_paid,
@@ -146,11 +212,19 @@ export default function RecordPaymentModal({
         payload.id = paymentRecord.id;
       }
 
-      const { data: dbData, error: dbErr } = await supabase
+      let { data: dbData, error: dbErr } = await supabase
         .from('payments')
         .upsert(payload)
         .select()
         .single();
+
+      // If remote Supabase table has old enum on received_by, fallback to 'LANDLORD'
+      if (dbErr && (dbErr.message?.includes('payment_receiver') || dbErr.code === '22P02')) {
+        payload.received_by = 'LANDLORD';
+        const retry = await supabase.from('payments').upsert(payload).select().single();
+        dbData = retry.data;
+        dbErr = retry.error;
+      }
 
       if (!dbErr && dbData?.id) {
         finalPaymentId = dbData.id;
@@ -172,21 +246,23 @@ export default function RecordPaymentModal({
     }, 600);
   };
 
+  const activeCategory = CATEGORY_OPTIONS.find((c) => c.value === paymentType) || CATEGORY_OPTIONS[0];
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs">
       <div className="bg-white border border-slate-300 rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95 duration-200">
         {/* Header */}
         <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-emerald-600 flex items-center justify-center text-white">
-              <CreditCard className="w-4 h-4" />
+            <div className="w-8 h-8 rounded-lg bg-emerald-600 flex items-center justify-center text-white text-base">
+              {activeCategory.icon}
             </div>
             <div>
               <h2 className="text-sm font-bold text-white">
-                {payment ? 'Edit Payment Record' : 'Record Rent Payment'}
+                {payment ? `Edit ${activeCategory.label} Record` : `Record ${activeCategory.label}`}
               </h2>
               <p className="text-[11px] text-slate-300">
-                Log UPI, cash receipts & track dues
+                Log {activeCategory.desc.toLowerCase()} & receipts
               </p>
             </div>
           </div>
@@ -200,13 +276,51 @@ export default function RecordPaymentModal({
         </div>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+        <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[82vh] overflow-y-auto">
           {success && (
             <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl text-emerald-800 text-xs font-semibold flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-600" />
               <span>Payment transaction saved successfully!</span>
             </div>
           )}
+
+          {/* Payment Category / Purpose */}
+          <div>
+            <label className="block text-xs font-bold text-slate-800 mb-1.5 flex items-center justify-between">
+              <span className="flex items-center gap-1.5">
+                <Tag className="w-3.5 h-3.5 text-indigo-600" />
+                Amount Type / Purpose *
+              </span>
+              <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider">
+                {activeCategory.label}
+              </span>
+            </label>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {CATEGORY_OPTIONS.map((cat) => {
+                const isSelected = paymentType === cat.value;
+                return (
+                  <button
+                    key={cat.value}
+                    type="button"
+                    onClick={() => handleCategoryChange(cat.value)}
+                    className={`flex items-center gap-2 p-2.5 rounded-xl border text-xs font-bold transition-all text-left cursor-pointer ${
+                      isSelected
+                        ? 'bg-indigo-50 border-indigo-600 text-indigo-900 shadow-xs ring-1 ring-indigo-600'
+                        : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50 hover:border-slate-400'
+                    }`}
+                  >
+                    <span className="text-base">{cat.icon}</span>
+                    <div className="min-w-0">
+                      <span className="block leading-tight font-bold truncate">{cat.label}</span>
+                      <span className="text-[10px] font-medium text-slate-500 block leading-tight truncate">
+                        {cat.desc}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
           {/* Tenant & Room Selection */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -252,7 +366,7 @@ export default function RecordPaymentModal({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-bold text-slate-800 mb-1 flex items-center gap-1">
-                <Calendar className="w-3.5 h-3.5 text-indigo-600" /> Billing Month *
+                <Calendar className="w-3.5 h-3.5 text-indigo-600" /> Month / Period *
               </label>
               <input
                 type="month"
@@ -321,13 +435,13 @@ export default function RecordPaymentModal({
           </div>
 
           {/* Payment Method & Status */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-bold text-slate-800 mb-1">Payment Method</label>
               <select
                 value={paymentMethod}
                 onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
-                className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 bg-white text-slate-900 focus:outline-none"
+                className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:outline-none focus:border-indigo-600"
               >
                 <option value="UPI">UPI (GPay/PhonePe)</option>
                 <option value="CASH">Cash</option>
@@ -341,7 +455,7 @@ export default function RecordPaymentModal({
               <select
                 value={paymentStatus}
                 onChange={(e) => setPaymentStatus(e.target.value as PaymentStatus)}
-                className="w-full text-xs font-bold border border-slate-300 rounded-lg p-2 bg-white text-slate-900 focus:outline-none"
+                className="w-full text-xs font-bold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:outline-none focus:border-indigo-600"
               >
                 <option value="PAID">PAID</option>
                 <option value="PARTIAL">PARTIAL</option>
@@ -349,44 +463,90 @@ export default function RecordPaymentModal({
                 <option value="OVERDUE">OVERDUE</option>
               </select>
             </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-800 mb-1">Received By</label>
-              <select
-                value={receivedBy}
-                onChange={(e) => setReceivedBy(e.target.value as PaymentReceiver)}
-                className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 bg-white text-slate-900 focus:outline-none"
-              >
-                <option value="LANDLORD">Landlord (Direct)</option>
-                <option value="CARETAKER">Caretaker</option>
-                <option value="MANAGER">Property Manager</option>
-              </select>
-            </div>
           </div>
 
-          {/* Transaction Ref & Notes */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-bold text-slate-800 mb-1">UPI Ref / UTR # (Optional)</label>
-              <input
-                type="text"
-                value={transactionRef}
-                onChange={(e) => setTransactionRef(e.target.value)}
-                placeholder="e.g. 12-digit UPI reference"
-                className="w-full text-xs font-medium border border-slate-300 rounded-lg p-2 bg-white text-slate-900 focus:outline-none"
-              />
+          {/* Received By (Who Took the Money) */}
+          <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <UserCheck className="w-3.5 h-3.5 text-indigo-600" />
+                Who Took / Received the Money? *
+              </label>
+              <span className="text-[10px] text-slate-500 font-semibold">Write name or choose preset</span>
             </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-800 mb-1">Notes</label>
-              <input
-                type="text"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="e.g. Paid on 1st, full settlement"
-                className="w-full text-xs font-medium border border-slate-300 rounded-lg p-2 bg-white text-slate-900 focus:outline-none"
-              />
+            {/* Quick Presets */}
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                profile.name ? `${profile.name} (Owner)` : 'Landlord (Direct)',
+                'Caretaker',
+                'Property Manager',
+                'Self',
+              ].map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => setReceivedBy(preset)}
+                  className="px-2 py-0.5 rounded-md bg-white hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-300 text-slate-700 text-[10px] font-semibold border border-slate-300 transition-colors cursor-pointer"
+                >
+                  + {preset}
+                </button>
+              ))}
             </div>
+
+            <input
+              type="text"
+              required
+              value={receivedBy}
+              onChange={(e) => setReceivedBy(e.target.value)}
+              placeholder="Write the name of person who took money (e.g. Dhanush, Suresh Caretaker, Watchman)"
+              className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:outline-none focus:border-indigo-600"
+            />
+          </div>
+
+          {/* Transaction Ref */}
+          <div>
+            <label className="block text-xs font-bold text-slate-800 mb-1">UPI Ref / UTR # (Optional)</label>
+            <input
+              type="text"
+              value={transactionRef}
+              onChange={(e) => setTransactionRef(e.target.value)}
+              placeholder="e.g. 12-digit UPI transaction reference or Cheque number"
+              className="w-full text-xs font-medium border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:outline-none focus:border-indigo-600"
+            />
+          </div>
+
+          {/* Notes & Remarks with Quick Suggestions */}
+          <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                Notes & Remarks
+              </label>
+              <span className="text-[10px] text-slate-500 font-semibold">Click quick tag to append</span>
+            </div>
+
+            {/* Quick Note Tags */}
+            <div className="flex flex-wrap gap-1.5">
+              {QUICK_NOTE_TAGS.map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => handleAppendNote(tag)}
+                  className="px-2 py-0.5 rounded-md bg-white hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-300 text-slate-700 text-[10px] font-semibold border border-slate-300 transition-colors cursor-pointer"
+                >
+                  + {tag}
+                </button>
+              ))}
+            </div>
+
+            <textarea
+              rows={2}
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="e.g. Paid via GPay, includes water charges & cleaning for March"
+              className="w-full text-xs font-medium border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:outline-none focus:border-indigo-600 resize-none"
+            />
           </div>
 
           {/* Footer Buttons */}
@@ -404,7 +564,7 @@ export default function RecordPaymentModal({
               className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 rounded-lg shadow-sm transition-all cursor-pointer"
             >
               <Save className="w-3.5 h-3.5" />
-              {saving ? 'Saving...' : 'Save Payment'}
+              {saving ? 'Saving...' : `Save ${activeCategory.label}`}
             </button>
           </div>
         </form>
