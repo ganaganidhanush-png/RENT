@@ -39,7 +39,7 @@ EXCEPTION
 END $$;
 
 DO $$ BEGIN
-    CREATE TYPE payment_receiver AS ENUM ('LANDLORD', 'CARETAKER');
+    CREATE TYPE payment_receiver AS ENUM ('LANDLORD', 'CARETAKER', 'MANAGER');
 EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS public.tenants (
 -- 4. Document Vault Table
 CREATE TABLE IF NOT EXISTS public.documents (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id UUID NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
+    tenant_id UUID REFERENCES public.tenants(id) ON DELETE CASCADE,
     room_id UUID REFERENCES public.rooms(id) ON DELETE SET NULL,
     doc_type document_type NOT NULL,
     storage_path TEXT NOT NULL,
@@ -107,8 +107,8 @@ CREATE TABLE IF NOT EXISTS public.documents (
 -- 5. Payments Table
 CREATE TABLE IF NOT EXISTS public.payments (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id UUID NOT NULL REFERENCES public.tenants(id) ON DELETE RESTRICT,
-    room_id UUID NOT NULL REFERENCES public.rooms(id) ON DELETE RESTRICT,
+    tenant_id UUID REFERENCES public.tenants(id) ON DELETE CASCADE,
+    room_id UUID REFERENCES public.rooms(id) ON DELETE CASCADE,
     billing_period_month DATE NOT NULL,
     amount_due NUMERIC(10, 2) NOT NULL,
     amount_paid NUMERIC(10, 2) NOT NULL DEFAULT 0.00,
@@ -152,29 +152,53 @@ DROP TRIGGER IF EXISTS trg_payments_updated_at ON public.payments;
 CREATE TRIGGER trg_payments_updated_at BEFORE UPDATE ON public.payments
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- Auto-sync Room status with Tenant status
+-- Auto-sync Room status with Tenant status accurately
 CREATE OR REPLACE FUNCTION sync_room_occupancy()
 RETURNS TRIGGER AS $$
+DECLARE
+    target_room_id UUID;
+    total_active_occupants INTEGER;
+    target_capacity INTEGER;
 BEGIN
-    IF (NEW.status IN ('ACTIVE', 'NOTICE_PERIOD') AND NEW.room_id IS NOT NULL) THEN
-        UPDATE public.rooms 
-        SET status = 'OCCUPIED', 
-            can_someone_get_in = (capacity > current_occupancy) 
-        WHERE id = NEW.room_id;
-    ELSIF (NEW.status = 'MOVED_OUT' AND NEW.room_id IS NOT NULL) THEN
-        UPDATE public.rooms 
-        SET status = 'VACANT', 
-            can_someone_get_in = true, 
-            current_occupancy = 0 
-        WHERE id = NEW.room_id;
+    target_room_id := COALESCE(NEW.room_id, OLD.room_id);
+    IF target_room_id IS NULL THEN
+        RETURN NEW;
     END IF;
+
+    -- Calculate total active members in this room across all active/notice-period tenants
+    SELECT COALESCE(SUM(
+        CASE 
+            WHEN t.tenant_type = 'BACHELORS' AND jsonb_array_length(COALESCE(t.occupants, '[]'::jsonb)) > 0 
+                THEN jsonb_array_length(t.occupants)
+            ELSE COALESCE(t.family_members_count, 1)
+        END
+    ), 0)
+    INTO total_active_occupants
+    FROM public.tenants t
+    WHERE t.room_id = target_room_id 
+      AND t.status IN ('ACTIVE', 'NOTICE_PERIOD');
+
+    SELECT COALESCE(capacity, 2) INTO target_capacity FROM public.rooms WHERE id = target_room_id;
+    IF target_capacity IS NULL THEN
+        target_capacity := 2;
+    END IF;
+
+    UPDATE public.rooms
+    SET current_occupancy = total_active_occupants,
+        status = CASE 
+            WHEN total_active_occupants > 0 THEN 'OCCUPIED'::room_status
+            ELSE 'VACANT'::room_status
+        END,
+        can_someone_get_in = (total_active_occupants < target_capacity)
+    WHERE id = target_room_id;
+
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_sync_room_occupancy ON public.tenants;
 CREATE TRIGGER trg_sync_room_occupancy
-AFTER INSERT OR UPDATE OF status, room_id ON public.tenants
+AFTER INSERT OR UPDATE OR DELETE ON public.tenants
 FOR EACH ROW EXECUTE FUNCTION sync_room_occupancy();
 
 -- 8. Row Level Security Policies

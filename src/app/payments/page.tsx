@@ -4,12 +4,13 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { 
   ArrowLeft, Plus, Edit3, Trash2, 
-  CheckCircle2, AlertCircle, RefreshCw, CreditCard 
+  CheckCircle2, AlertCircle, RefreshCw, CreditCard, Receipt 
 } from 'lucide-react';
 import { Payment } from '@/types/database';
 import { getLocalPayments, saveLocalPayment, deleteLocalPayment } from '@/lib/store/app-store';
 import { createClient } from '@/lib/supabase/client';
 import RecordPaymentModal from '@/components/payments/record-payment-modal';
+import RentReceiptModal from '@/components/payments/rent-receipt-modal';
 
 export default function PaymentsPage() {
   const [payments, setPayments] = useState<Payment[]>(() => {
@@ -18,6 +19,26 @@ export default function PaymentsPage() {
   });
   const [editingPayment, setEditingPayment] = useState<Payment | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [receiptPayment, setReceiptPayment] = useState<Payment | null>(null);
+  const [isReceiptOpen, setIsReceiptOpen] = useState(false);
+
+  const deduplicate = (remoteList: Payment[], localList: Payment[]): Payment[] => {
+    const merged = [...remoteList];
+    for (const lp of localList) {
+      const alreadyExists = merged.some((m) => {
+        if (m.id === lp.id) return true;
+        const sameTenant = m.tenant_id === lp.tenant_id;
+        const sameRoom = m.room_id === lp.room_id;
+        const mMonth = (m.billing_period_month || '').slice(0, 7);
+        const lpMonth = (lp.billing_period_month || '').slice(0, 7);
+        return sameTenant && sameRoom && mMonth === lpMonth && mMonth !== '';
+      });
+      if (!alreadyExists) {
+        merged.push(lp);
+      }
+    }
+    return merged;
+  };
 
   const loadPayments = async () => {
     try {
@@ -29,13 +50,7 @@ export default function PaymentsPage() {
 
       if (!error && data && data.length > 0) {
         const local = getLocalPayments();
-        const merged = [...data];
-        for (const lp of local) {
-          if (!merged.some((m) => m.id === lp.id)) {
-            merged.push(lp);
-          }
-        }
-        setPayments(merged);
+        setPayments(deduplicate(data, local));
       } else {
         setPayments(getLocalPayments());
       }
@@ -55,13 +70,7 @@ export default function PaymentsPage() {
 
         if (!error && data && data.length > 0) {
           const local = getLocalPayments();
-          const merged = [...data];
-          for (const lp of local) {
-            if (!merged.some((m) => m.id === lp.id)) {
-              merged.push(lp);
-            }
-          }
-          setPayments(merged);
+          setPayments(deduplicate(data, local));
         }
       } catch (err) {
         console.warn('Payments sync note:', err);
@@ -113,17 +122,36 @@ export default function PaymentsPage() {
     }
   };
 
-  const handleQuickMarkPaid = (p: Payment) => {
+  const handleQuickMarkPaid = async (p: Payment) => {
+    const today = new Date().toISOString().split('T')[0];
     const updated: Payment = {
       ...p,
       amount_paid: p.amount_due,
       amount_pending: 0,
       payment_status: 'PAID',
-      payment_date: new Date().toISOString().split('T')[0],
+      payment_date: today,
       updated_at: new Date().toISOString(),
     };
     saveLocalPayment(updated);
     handlePaymentSaved(updated);
+
+    try {
+      const supabase = createClient();
+      if (p.id && !p.id.startsWith('pay-')) {
+        await supabase
+          .from('payments')
+          .update({
+            amount_paid: p.amount_due,
+            amount_pending: 0,
+            payment_status: 'PAID',
+            payment_date: today,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', p.id);
+      }
+    } catch (err) {
+      console.warn('Supabase mark paid sync note:', err);
+    }
   };
 
   const totalCollected = payments.reduce((acc, p) => acc + Number(p.amount_paid || 0), 0);
@@ -270,6 +298,18 @@ export default function PaymentsPage() {
                       </td>
                       <td className="py-3.5 px-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setReceiptPayment(p);
+                              setIsReceiptOpen(true);
+                            }}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 hover:text-slate-900 text-[11px] font-bold border border-slate-300 transition-colors cursor-pointer"
+                            title="Generate rent receipt and share on WhatsApp"
+                          >
+                            <Receipt className="w-3.5 h-3.5 text-indigo-600" /> Receipt
+                          </button>
+
                           {!isPaid && (
                             <button
                               type="button"
@@ -317,6 +357,18 @@ export default function PaymentsPage() {
             setEditingPayment(null);
           }}
           onSaved={handlePaymentSaved}
+        />
+      )}
+
+      {/* Rent Receipt Modal */}
+      {isReceiptOpen && receiptPayment && (
+        <RentReceiptModal
+          payment={receiptPayment}
+          isOpen={isReceiptOpen}
+          onClose={() => {
+            setIsReceiptOpen(false);
+            setReceiptPayment(null);
+          }}
         />
       )}
     </div>

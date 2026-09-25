@@ -3,7 +3,7 @@ export type TenantStatus = 'ACTIVE' | 'NOTICE_PERIOD' | 'MOVED_OUT';
 export type TenantType = 'BACHELORS' | 'FAMILY';
 export type DocumentType = 'AADHAR_CARD' | 'RENTAL_AGREEMENT' | 'TENANT_PHOTO' | 'POLICE_VERIFICATION' | 'ELECTRICITY_BILL' | 'OTHER';
 export type PaymentMethod = 'UPI' | 'CASH' | 'BANK_TRANSFER' | 'CHEQUE';
-export type PaymentReceiver = 'LANDLORD' | 'CARETAKER';
+export type PaymentReceiver = 'LANDLORD' | 'CARETAKER' | 'MANAGER';
 export type PaymentStatus = 'PAID' | 'PARTIAL' | 'PENDING' | 'OVERDUE';
 
 export interface BachelorOccupant {

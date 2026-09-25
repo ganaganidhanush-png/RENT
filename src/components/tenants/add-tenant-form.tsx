@@ -250,7 +250,13 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
       }
 
       const selectedRoom = rooms.find((r) => r.id === formData.roomId);
-      const generatedId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `tenant-${Date.now()}`;
+      const generatedId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+            const r = (Math.random() * 16) | 0;
+            const v = c === 'x' ? r : (r & 0x3) | 0x8;
+            return v.toString(16);
+          });
 
       // Build structured tenant object
       const newTenant: Tenant = {
@@ -280,12 +286,14 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
       saveLocalTenant(newTenant);
 
       // Auto-create initial billing payment entry for the tenant
-      const currentMonthName = new Date().toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+      const now = new Date();
+      const currentMonthIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+      const currentMonthName = now.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
       const initialPayment: Payment = {
         id: `pay-${Date.now()}`,
         tenant_id: generatedId,
         room_id: formData.roomId,
-        billing_period_month: currentMonthName,
+        billing_period_month: currentMonthIso,
         billing_month: currentMonthName,
         amount_due: Number(formData.monthlyRent),
         amount_paid: 0,
@@ -496,7 +504,7 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
           <div className="border-b border-slate-200 pb-2">
             <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2">
               <Building2 className="w-4 h-4 text-indigo-600" />
-              2. Room Assignment & Terms (6 Units)
+              2. Room Assignment & Terms
             </h2>
           </div>
 

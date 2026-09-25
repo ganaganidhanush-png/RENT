@@ -47,6 +47,7 @@ function EditTenantModalContent({
   const [securityDeposit, setSecurityDeposit] = useState(() => String(tenant.security_deposit_paid || ''));
   const [moveInDate, setMoveInDate] = useState(() => tenant.move_in_date || '');
   const [leaseEndDate, setLeaseEndDate] = useState(() => tenant.lease_end_date || '');
+  const [actualMoveOutDate, setActualMoveOutDate] = useState(() => tenant.actual_move_out_date || '');
   const [emergencyName, setEmergencyName] = useState(() => tenant.emergency_contact_name || '');
   const [emergencyPhone, setEmergencyPhone] = useState(() => tenant.emergency_contact_phone || '');
   const [emergencyRelation, setEmergencyRelation] = useState(() => tenant.emergency_contact_relation || 'Parent');
@@ -144,6 +145,7 @@ function EditTenantModalContent({
       security_deposit_paid: Number(securityDeposit),
       move_in_date: moveInDate,
       lease_end_date: leaseEndDate,
+      actual_move_out_date: status === 'MOVED_OUT' ? (actualMoveOutDate || new Date().toISOString().split('T')[0]) : null,
       status,
       emergency_contact_name: emergencyName,
       emergency_contact_phone: emergencyPhone,
@@ -174,6 +176,7 @@ function EditTenantModalContent({
           security_deposit_paid: updatedTenant.security_deposit_paid,
           move_in_date: updatedTenant.move_in_date,
           lease_end_date: updatedTenant.lease_end_date,
+          actual_move_out_date: updatedTenant.actual_move_out_date,
           status: updatedTenant.status,
           emergency_contact_name: updatedTenant.emergency_contact_name,
           emergency_contact_phone: updatedTenant.emergency_contact_phone,
@@ -589,7 +592,13 @@ function EditTenantModalContent({
               <label className="block text-xs font-bold text-slate-800 mb-1">Tenancy Status</label>
               <select
                 value={status}
-                onChange={(e) => setStatus(e.target.value as TenantStatus)}
+                onChange={(e) => {
+                  const newStatus = e.target.value as TenantStatus;
+                  setStatus(newStatus);
+                  if (newStatus === 'MOVED_OUT' && !actualMoveOutDate) {
+                    setActualMoveOutDate(new Date().toISOString().split('T')[0]);
+                  }
+                }}
                 className="w-full text-xs font-bold border border-slate-300 rounded-lg p-2 bg-white text-slate-900 focus:outline-none"
               >
                 <option value="ACTIVE">ACTIVE (Currently Living)</option>
@@ -597,6 +606,18 @@ function EditTenantModalContent({
                 <option value="MOVED_OUT">MOVED OUT (Vacated)</option>
               </select>
             </div>
+
+            {status === 'MOVED_OUT' && (
+              <div className="sm:col-span-3">
+                <label className="block text-xs font-bold text-amber-900 mb-1">Actual Move-Out Date</label>
+                <input
+                  type="date"
+                  value={actualMoveOutDate}
+                  onChange={(e) => setActualMoveOutDate(e.target.value)}
+                  className="w-full text-xs font-semibold border border-amber-300 bg-amber-50/70 rounded-lg p-2 text-slate-900 focus:outline-none"
+                />
+              </div>
+            )}
           </div>
 
           {/* Emergency Contact */}

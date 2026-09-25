@@ -8,7 +8,7 @@ const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
   title: 'RentVault - Micro Property Management',
-  description: 'Manage 5 rental rooms, tenant onboarding, rent ledger, and secure ID document vault.',
+  description: 'Manage rental rooms, tenant onboarding, rent ledger, and secure ID document vault.',
 };
 
 export default function RootLayout({

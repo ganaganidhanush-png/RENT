@@ -17,6 +17,7 @@ interface DashboardProps {
   rooms: Room[];
   recentPayments: Payment[];
   expiringTenants: Tenant[];
+  allTenants?: Tenant[];
   stats: {
     occupiedRooms: number;
     totalRooms: number;
@@ -31,6 +32,7 @@ export default function DashboardView({
   rooms: initialRooms, 
   recentPayments: initialPayments, 
   expiringTenants: initialExpiring, 
+  allTenants: initialAllTenants,
   stats: initialStats 
 }: DashboardProps) {
   const [rooms, setRooms] = useState<Room[]>(() => {
@@ -43,7 +45,7 @@ export default function DashboardView({
   });
 
   const [tenants, setTenants] = useState<Tenant[]>(() => {
-    if (initialExpiring && initialExpiring.length > 0) return initialExpiring;
+    if (initialAllTenants && initialAllTenants.length > 0) return initialAllTenants;
     if (typeof window !== 'undefined') {
       return getLocalTenants();
     }
@@ -79,12 +81,17 @@ export default function DashboardView({
   const totalRoomsCount = rooms.length > 0 ? rooms.length : 6;
   const occupiedRoomsCount = rooms.filter((r) => r.status === 'OCCUPIED').length;
   const vacantRoomsCount = rooms.filter((r) => r.status === 'VACANT' || r.can_someone_get_in).length;
-  const bachelorsCount = tenants.filter((t) => t.tenant_type === 'BACHELORS').length;
-  const familiesCount = tenants.filter((t) => t.tenant_type === 'FAMILY').length;
+  const activeTenants = tenants.filter((t) => t.status !== 'MOVED_OUT');
+  const bachelorsCount = activeTenants.filter((t) => t.tenant_type === 'BACHELORS').length;
+  const familiesCount = activeTenants.filter((t) => t.tenant_type === 'FAMILY').length;
 
-  const totalRentExpected = rooms.reduce((acc, r) => acc + (r.status === 'OCCUPIED' ? Number(r.base_rent) : 0), 0) || initialStats.totalRentExpected;
-  const totalRentCollected = payments.reduce((acc, p) => acc + (p.payment_status === 'PAID' ? Number(p.amount_paid || 0) : 0), 0) || initialStats.totalRentCollected;
-  const pendingDues = Math.max(0, totalRentExpected - totalRentCollected);
+  const totalRentExpected = (activeTenants.length > 0
+    ? activeTenants.reduce((acc, t) => acc + Number(t.monthly_rent || 0), 0)
+    : rooms.reduce((acc, r) => acc + (r.status === 'OCCUPIED' ? Number(r.base_rent) : 0), 0)) || initialStats.totalRentExpected;
+  const totalRentCollected = payments.reduce((acc, p) => acc + Number(p.amount_paid || 0), 0) || initialStats.totalRentCollected;
+  const pendingDues = payments.length > 0 
+    ? payments.reduce((acc, p) => acc + Number(p.amount_pending || 0), 0) 
+    : Math.max(0, totalRentExpected - totalRentCollected);
 
   const occupancyPercentage = totalRoomsCount > 0 
     ? Math.round((occupiedRoomsCount / totalRoomsCount) * 100) 
@@ -145,7 +152,7 @@ export default function DashboardView({
           <div className="flex items-center gap-2.5">
             <h1 className="text-2xl font-black text-slate-900 tracking-tight">Property Dashboard</h1>
             <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
-              6 Units (G1, 2A, 2B, 3A, 3B, P1)
+              {rooms.length} Units {rooms.length > 0 ? `(${rooms.map((r) => r.room_number).join(', ')})` : ''}
             </span>
           </div>
           <p className="text-xs font-semibold text-slate-600 mt-1">
@@ -266,7 +273,7 @@ export default function DashboardView({
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
           {rooms.map((room) => {
             const roomTenants = tenants.filter(
-              (t) => t.room_id === room.id || (t.room && t.room.room_number === room.room_number)
+              (t) => (t.room_id === room.id || (t.room && t.room.room_number === room.room_number)) && t.status !== 'MOVED_OUT'
             );
             const primaryTenant = roomTenants[0];
 
@@ -362,12 +369,14 @@ export default function DashboardView({
                           <button
                             type="button"
                             onClick={() => {
-                              const monthStr = new Date().toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+                              const now = new Date();
+                              const currentMonthIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+                              const monthStr = now.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
                               setEditingPayment({
                                 id: `pay-${Date.now()}`,
                                 tenant_id: primaryTenant.id,
                                 room_id: room.id,
-                                billing_period_month: monthStr,
+                                billing_period_month: currentMonthIso,
                                 billing_month: monthStr,
                                 amount_due: Number(primaryTenant.monthly_rent || room.base_rent),
                                 amount_paid: Number(primaryTenant.monthly_rent || room.base_rent),

@@ -11,9 +11,10 @@ interface EditRoomModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSaved?: (updatedRoom: Room) => void;
+  isNew?: boolean;
 }
 
-export default function EditRoomModal({ room, isOpen, onClose, onSaved }: EditRoomModalProps) {
+export default function EditRoomModal({ room, isOpen, onClose, onSaved, isNew = false }: EditRoomModalProps) {
   const [formData, setFormData] = useState(() => ({
     roomNumber: room?.room_number || '',
     floor: room?.floor ?? 1,
@@ -22,22 +23,26 @@ export default function EditRoomModal({ room, isOpen, onClose, onSaved }: EditRo
     status: (room?.status || 'VACANT') as RoomStatus,
     capacity: room?.capacity ?? 2,
     currentOccupancy: room?.current_occupancy ?? 0,
-    canSomeoneGetIn: room?.can_someone_get_in ?? (room?.status === 'VACANT'),
+    canSomeoneGetIn: room?.can_someone_get_in ?? (room?.status === 'VACANT' || !room),
     notes: room?.notes || '',
   }));
 
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
 
-  if (!isOpen || !room) return null;
+  if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
 
+    const generatedId = (room?.id && !room.id.startsWith('room-'))
+      ? room.id
+      : (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `room-${Date.now()}`);
+
     const updatedRoom: Room = {
-      ...room,
-      room_number: formData.roomNumber,
+      id: room?.id || generatedId,
+      room_number: formData.roomNumber.trim().toUpperCase(),
       floor: Number(formData.floor),
       base_rent: Number(formData.baseRent),
       security_deposit: Number(formData.securityDeposit),
@@ -47,6 +52,7 @@ export default function EditRoomModal({ room, isOpen, onClose, onSaved }: EditRo
       can_someone_get_in: Boolean(formData.canSomeoneGetIn),
       notes: formData.notes,
       updated_at: new Date().toISOString(),
+      created_at: room?.created_at || new Date().toISOString(),
     };
 
     // 1. Save in local store for immediate UI update
@@ -55,9 +61,30 @@ export default function EditRoomModal({ room, isOpen, onClose, onSaved }: EditRo
     // 2. Sync to Supabase if available
     try {
       const supabase = createClient();
-      await supabase
-        .from('rooms')
-        .update({
+      if (isNew || !room?.id) {
+        const { data: inserted } = await supabase
+          .from('rooms')
+          .insert({
+            room_number: updatedRoom.room_number,
+            floor: updatedRoom.floor,
+            base_rent: updatedRoom.base_rent,
+            security_deposit: updatedRoom.security_deposit,
+            status: updatedRoom.status,
+            capacity: updatedRoom.capacity,
+            current_occupancy: updatedRoom.current_occupancy,
+            can_someone_get_in: updatedRoom.can_someone_get_in,
+            notes: updatedRoom.notes,
+          })
+          .select()
+          .single();
+
+        if (inserted?.id) {
+          updatedRoom.id = inserted.id;
+          saveLocalRoom(updatedRoom);
+        }
+      } else {
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(room.id);
+        const query = supabase.from('rooms').update({
           room_number: updatedRoom.room_number,
           floor: updatedRoom.floor,
           base_rent: updatedRoom.base_rent,
@@ -67,8 +94,17 @@ export default function EditRoomModal({ room, isOpen, onClose, onSaved }: EditRo
           current_occupancy: updatedRoom.current_occupancy,
           can_someone_get_in: updatedRoom.can_someone_get_in,
           notes: updatedRoom.notes,
-        })
-        .eq('id', room.id);
+        });
+
+        const { data: updated } = isUuid
+          ? await query.eq('id', room.id).select().single()
+          : await query.eq('room_number', room.room_number).select().single();
+
+        if (updated?.id) {
+          updatedRoom.id = updated.id;
+          saveLocalRoom(updatedRoom);
+        }
+      }
     } catch (err) {
       console.warn('Supabase rooms sync note:', err);
     }
@@ -93,8 +129,12 @@ export default function EditRoomModal({ room, isOpen, onClose, onSaved }: EditRo
               <Building2 className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-sm font-bold text-white">Edit Room Details: {room.room_number}</h2>
-              <p className="text-[11px] text-slate-300">Update rent, status & move-in availability</p>
+              <h2 className="text-sm font-bold text-white">
+                {isNew || !room ? 'Add New Room Unit' : `Edit Room Details: ${room.room_number}`}
+              </h2>
+              <p className="text-[11px] text-slate-300">
+                {isNew ? 'Define unit number, floor, base rent & capacity' : 'Update rent, status & move-in availability'}
+              </p>
             </div>
           </div>
           <button

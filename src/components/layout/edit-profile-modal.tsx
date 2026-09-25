@@ -132,7 +132,7 @@ export default function EditProfileModal({ isOpen, onClose, onSaved }: EditProfi
                 value={profile.propertyName}
                 onChange={(e) => setProfile({ ...profile, propertyName: e.target.value })}
                 className="w-full text-xs font-medium border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 focus:outline-none"
-                placeholder="RentVault 6 Units"
+                placeholder="RentVault Properties"
               />
             </div>
 

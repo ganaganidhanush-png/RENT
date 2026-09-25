@@ -33,7 +33,18 @@ export default function RecordPaymentModal({
   const [tenants] = useState<Tenant[]>(() => (propTenants && propTenants.length > 0 ? propTenants : getLocalTenants()));
   const [rooms] = useState<Room[]>(() => (propRooms && propRooms.length > 0 ? propRooms : getLocalRooms()));
 
-  const currentMonthStr = new Date().toLocaleString('default', { month: 'long', year: 'numeric' });
+  const defaultYearMonth = () => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  };
+
+  const initialYearMonth = () => {
+    if (!payment?.billing_period_month) return defaultYearMonth();
+    if (/^\d{4}-\d{2}/.test(payment.billing_period_month)) {
+      return payment.billing_period_month.slice(0, 7);
+    }
+    return defaultYearMonth();
+  };
 
   // Initial State Setup
   const [selectedTenantId, setSelectedTenantId] = useState(() => 
@@ -45,7 +56,7 @@ export default function RecordPaymentModal({
   const initialDue = payment?.amount_due !== undefined ? payment.amount_due : (initialTenant?.monthly_rent || 0);
 
   const [selectedRoomId, setSelectedRoomId] = useState(initialRoomId);
-  const [billingMonth, setBillingMonth] = useState(() => payment?.billing_period_month || currentMonthStr);
+  const [billingMonthYear, setBillingMonthYear] = useState(initialYearMonth);
   const [amountDue, setAmountDue] = useState(() => String(initialDue));
   const [amountPaid, setAmountPaid] = useState(() => String(payment?.amount_paid ?? initialDue));
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(() => payment?.payment_method || 'UPI');
@@ -84,11 +95,18 @@ export default function RecordPaymentModal({
     const activeTenant = tenants.find((t) => t.id === selectedTenantId);
     const activeRoom = rooms.find((r) => r.id === selectedRoomId);
 
+    // Standardize billing_period_month to YYYY-MM-01 (Postgres DATE requirement)
+    const isoBillingPeriod = `${billingMonthYear}-01`;
+    const billingDisplay = new Date(`${billingMonthYear}-15`).toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+
+    let finalPaymentId = payment?.id || `pay-${Date.now()}`;
+
     const paymentRecord: Payment = {
-      id: payment?.id || `pay-${Date.now()}`,
+      id: finalPaymentId,
       tenant_id: selectedTenantId,
       room_id: selectedRoomId,
-      billing_period_month: billingMonth,
+      billing_period_month: isoBillingPeriod,
+      billing_month: billingDisplay,
       amount_due: dueNum,
       amount_paid: paidNum,
       amount_pending: pendingNum,
@@ -110,11 +128,10 @@ export default function RecordPaymentModal({
     // 2. Sync to Supabase
     try {
       const supabase = createClient();
-      await supabase.from('payments').upsert({
-        id: paymentRecord.id.startsWith('pay-') ? undefined : paymentRecord.id,
+      const payload: Record<string, unknown> = {
         tenant_id: paymentRecord.tenant_id,
         room_id: paymentRecord.room_id,
-        billing_period_month: paymentRecord.billing_period_month,
+        billing_period_month: isoBillingPeriod,
         amount_due: paymentRecord.amount_due,
         amount_paid: paymentRecord.amount_paid,
         payment_status: paymentRecord.payment_status,
@@ -123,7 +140,24 @@ export default function RecordPaymentModal({
         received_by: paymentRecord.received_by,
         transaction_ref: paymentRecord.transaction_ref,
         notes: paymentRecord.notes,
-      });
+      };
+
+      if (paymentRecord.id && !paymentRecord.id.startsWith('pay-')) {
+        payload.id = paymentRecord.id;
+      }
+
+      const { data: dbData, error: dbErr } = await supabase
+        .from('payments')
+        .upsert(payload)
+        .select()
+        .single();
+
+      if (!dbErr && dbData?.id) {
+        finalPaymentId = dbData.id;
+        paymentRecord.id = dbData.id;
+        // Keep local cache synced with real database UUID
+        saveLocalPayment(paymentRecord);
+      }
     } catch (err) {
       console.warn('Supabase payment sync note:', err);
     }
@@ -221,13 +255,15 @@ export default function RecordPaymentModal({
                 <Calendar className="w-3.5 h-3.5 text-indigo-600" /> Billing Month *
               </label>
               <input
-                type="text"
+                type="month"
                 required
-                value={billingMonth}
-                onChange={(e) => setBillingMonth(e.target.value)}
-                placeholder="e.g. September 2026"
+                value={billingMonthYear}
+                onChange={(e) => setBillingMonthYear(e.target.value)}
                 className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:outline-none focus:border-indigo-600"
               />
+              <span className="text-[10px] text-slate-500 font-medium mt-0.5 block">
+                Period: {new Date(`${billingMonthYear}-15`).toLocaleString('en-IN', { month: 'long', year: 'numeric' })}
+              </span>
             </div>
 
             <div>
@@ -322,7 +358,8 @@ export default function RecordPaymentModal({
                 className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 bg-white text-slate-900 focus:outline-none"
               >
                 <option value="LANDLORD">Landlord (Direct)</option>
-                <option value="MANAGER">Manager</option>
+                <option value="CARETAKER">Caretaker</option>
+                <option value="MANAGER">Property Manager</option>
               </select>
             </div>
           </div>

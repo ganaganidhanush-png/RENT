@@ -19,6 +19,7 @@ export default function RoomsPage() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [editingRoom, setEditingRoom] = useState<Room | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isAddRoomModalOpen, setIsAddRoomModalOpen] = useState(false);
 
   const [editingTenant, setEditingTenant] = useState<Tenant | null>(null);
   const [isTenantModalOpen, setIsTenantModalOpen] = useState(false);
@@ -28,22 +29,21 @@ export default function RoomsPage() {
 
   useEffect(() => {
     async function loadData() {
-      setRooms(getLocalRooms());
+      const localRooms = getLocalRooms();
+      setRooms(localRooms);
       setTenants(getLocalTenants());
 
       try {
         const supabase = createClient();
         const [{ data: roomsData }, { data: tenantsData }] = await Promise.all([
-          supabase.from('rooms').select('*').order('floor', { ascending: true }),
+          supabase.from('rooms').select('*').order('floor', { ascending: true }).order('room_number'),
           supabase.from('tenants').select('*, room:rooms(*)').order('created_at', { ascending: false })
         ]);
 
         if (roomsData && roomsData.length > 0) {
-          const merged = DEFAULT_ROOMS.map((def) => {
-            const found = roomsData.find((r) => r.room_number === def.room_number);
-            return found || def;
-          });
-          setRooms(merged);
+          setRooms(roomsData);
+        } else if (localRooms && localRooms.length > 0) {
+          setRooms(localRooms);
         }
 
         if (tenantsData && tenantsData.length > 0) {
@@ -71,9 +71,13 @@ export default function RoomsPage() {
   };
 
   const handleRoomSaved = (updatedRoom: Room) => {
-    setRooms((prev) =>
-      prev.map((r) => (r.id === updatedRoom.id || r.room_number === updatedRoom.room_number ? updatedRoom : r))
-    );
+    setRooms((prev) => {
+      const exists = prev.some((r) => r.id === updatedRoom.id || r.room_number === updatedRoom.room_number);
+      if (exists) {
+        return prev.map((r) => (r.id === updatedRoom.id || r.room_number === updatedRoom.room_number ? updatedRoom : r));
+      }
+      return [...prev, updatedRoom];
+    });
   };
 
   const getMoveInBadge = (room: Room) => {
@@ -125,31 +129,42 @@ export default function RoomsPage() {
           </Link>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold text-slate-900 tracking-tight">Rental Units (6 Rooms)</h1>
+              <h1 className="text-xl font-bold text-slate-900 tracking-tight">Rental Units</h1>
               <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
-                G1, 2A, 2B, 3A, 3B, P1
+                {rooms.length} Units Active
               </span>
             </div>
             <p className="text-xs font-semibold text-slate-600 mt-0.5">
-              Live capacity tracking, vacancy status & option to edit room details
+              Live capacity tracking, vacancy status & option to add or edit room details
             </p>
           </div>
         </div>
 
-        <Link
-          href="/tenants/new"
-          className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shadow-xs transition-all"
-        >
-          <Plus className="w-4 h-4" />
-          Assign New Tenant
-        </Link>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setIsAddRoomModalOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold shadow-xs transition-all cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            Add Room Unit
+          </button>
+
+          <Link
+            href="/tenants/new"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shadow-xs transition-all"
+          >
+            <Plus className="w-4 h-4" />
+            Assign New Tenant
+          </Link>
+        </div>
       </div>
 
       {/* 6 Rooms Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {rooms.map((room) => {
           const roomTenants = tenants.filter(
-            (t) => t.room_id === room.id || (t.room && t.room.room_number === room.room_number)
+            (t) => (t.room_id === room.id || (t.room && t.room.room_number === room.room_number)) && t.status !== 'MOVED_OUT'
           );
           // Count actual members staying in room (not by bed)
           const membersStaying = roomTenants.reduce((sum, t) => {
@@ -257,7 +272,7 @@ export default function RoomsPage() {
                 {/* Assigned Tenant / Occupants Info if occupied */}
                 {(() => {
                   const roomTenants = tenants.filter(
-                    (t) => t.room_id === room.id || (t.room && t.room.room_number === room.room_number)
+                    (t) => (t.room_id === room.id || (t.room && t.room.room_number === room.room_number)) && t.status !== 'MOVED_OUT'
                   );
                   const primaryTenant = roomTenants[0];
 
@@ -324,12 +339,14 @@ export default function RoomsPage() {
                       <button
                         type="button"
                         onClick={() => {
-                          const monthStr = new Date().toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+                          const now = new Date();
+                          const currentMonthIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+                          const monthStr = now.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
                           setEditingPayment({
                             id: `pay-${Date.now()}`,
                             tenant_id: primaryTenant.id,
                             room_id: room.id,
-                            billing_period_month: monthStr,
+                            billing_period_month: currentMonthIso,
                             billing_month: monthStr,
                             amount_due: Number(primaryTenant.monthly_rent || room.base_rent),
                             amount_paid: Number(primaryTenant.monthly_rent || room.base_rent),
@@ -373,6 +390,20 @@ export default function RoomsPage() {
           );
         })}
       </div>
+
+      {/* Add New Room Unit Modal */}
+      {isAddRoomModalOpen && (
+        <EditRoomModal
+          room={null}
+          isNew={true}
+          isOpen={isAddRoomModalOpen}
+          onClose={() => setIsAddRoomModalOpen(false)}
+          onSaved={(newRoom) => {
+            handleRoomSaved(newRoom);
+            setIsAddRoomModalOpen(false);
+          }}
+        />
+      )}
 
       {/* Edit Room Modal */}
       {isEditModalOpen && editingRoom && (

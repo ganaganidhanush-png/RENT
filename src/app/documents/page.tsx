@@ -108,11 +108,16 @@ export default function DocumentsPage() {
     saveLocalDocument(newDoc);
     setDocuments((prev) => [newDoc, ...prev]);
 
-    // Optional Supabase insertion
+    // Supabase Storage upload & Database insertion
     try {
       const supabase = createClient();
+      if (fileObject) {
+        await supabase.storage
+          .from('tenant-vault')
+          .upload(storagePath, fileObject, { cacheControl: '3600', upsert: true });
+      }
+
       await supabase.from('documents').insert({
-        id: generatedId,
         tenant_id: newDoc.tenant_id,
         room_id: newDoc.room_id,
         doc_type: newDoc.doc_type,
@@ -135,10 +140,14 @@ export default function DocumentsPage() {
 
   const handleDeleteDocument = async (docId: string) => {
     if (confirm('Are you sure you want to remove this document from the vault?')) {
+      const targetDoc = documents.find((d) => d.id === docId);
       deleteLocalDocument(docId);
       setDocuments((prev) => prev.filter((d) => d.id !== docId));
       try {
         const supabase = createClient();
+        if (targetDoc?.storage_path) {
+          await supabase.storage.from('tenant-vault').remove([targetDoc.storage_path]);
+        }
         await supabase.from('documents').delete().eq('id', docId);
       } catch (err) {
         console.warn('Supabase delete document note:', err);

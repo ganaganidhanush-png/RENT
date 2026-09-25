@@ -21,8 +21,8 @@ export const DEFAULT_LANDLORD_PROFILE: LandlordProfile = {
   phone: '',
   email: '',
   upiId: '',
-  propertyName: 'RentVault (6 Units)',
-  address: 'G1, 2A, 2B, 3A, 3B, P1',
+  propertyName: 'RentVault Property',
+  address: 'Main Building Units',
 };
 
 // Dispatch global event for instant cross-component updates
@@ -81,28 +81,43 @@ export function getLocalTenants(): Tenant[] {
   }
 }
 
+export function syncLocalRoomOccupancy(roomId: string, currentTenants?: Tenant[]) {
+  const tenants = currentTenants || getLocalTenants();
+  const rooms = getLocalRooms();
+  const targetRoom = rooms.find((r) => r.id === roomId);
+  if (!targetRoom) return;
+
+  // Active occupants (ACTIVE or NOTICE_PERIOD are still occupying beds)
+  const activeTenants = tenants.filter(
+    (t) => t.room_id === roomId && (t.status === 'ACTIVE' || t.status === 'NOTICE_PERIOD')
+  );
+
+  let totalOccupants = 0;
+  for (const t of activeTenants) {
+    if (t.tenant_type === 'BACHELORS' && t.occupants && t.occupants.length > 0) {
+      totalOccupants += t.occupants.length;
+    } else {
+      totalOccupants += t.family_members_count || 1;
+    }
+  }
+
+  const capacity = targetRoom.capacity || 2;
+  const newStatus = totalOccupants === 0 ? 'VACANT' : 'OCCUPIED';
+  const canSomeoneGetIn = totalOccupants < capacity;
+
+  saveLocalRoom({
+    ...targetRoom,
+    status: newStatus,
+    current_occupancy: totalOccupants,
+    can_someone_get_in: canSomeoneGetIn,
+  });
+}
+
 export function saveLocalTenant(tenant: Tenant): Tenant[] {
   const tenants = getLocalTenants();
   const index = tenants.findIndex((t) => t.id === tenant.id);
+  const oldRoomId = index >= 0 ? tenants[index].room_id : null;
   let newTenants: Tenant[];
-
-  // If room changed, handle freeing up the old room
-  if (index >= 0 && tenants[index].room_id && tenants[index].room_id !== tenant.room_id) {
-    const oldRoomId = tenants[index].room_id;
-    const remainingInOld = tenants.filter((t) => t.room_id === oldRoomId && t.id !== tenant.id && t.status === 'ACTIVE');
-    if (remainingInOld.length === 0) {
-      const rooms = getLocalRooms();
-      const oldRoom = rooms.find((r) => r.id === oldRoomId);
-      if (oldRoom) {
-        saveLocalRoom({
-          ...oldRoom,
-          status: 'VACANT',
-          current_occupancy: 0,
-          can_someone_get_in: true,
-        });
-      }
-    }
-  }
 
   if (index >= 0) {
     newTenants = [...tenants];
@@ -114,37 +129,13 @@ export function saveLocalTenant(tenant: Tenant): Tenant[] {
     localStorage.setItem(TENANTS_STORAGE_KEY, JSON.stringify(newTenants));
   }
 
-  // Update new room occupancy automatically
+  // Sync occupancy for the new room
   if (tenant.room_id) {
-    const rooms = getLocalRooms();
-    const targetRoom = rooms.find((r) => r.id === tenant.room_id);
-    if (targetRoom) {
-      if (tenant.status !== 'ACTIVE') {
-        const remainingActive = newTenants.filter((t) => t.room_id === tenant.room_id && t.id !== tenant.id && t.status === 'ACTIVE');
-        if (remainingActive.length === 0) {
-          saveLocalRoom({
-            ...targetRoom,
-            status: 'VACANT',
-            current_occupancy: 0,
-            can_someone_get_in: true,
-          });
-        }
-      } else {
-        const occupantsCount = tenant.tenant_type === 'BACHELORS' && tenant.occupants
-          ? tenant.occupants.length
-          : (tenant.family_members_count || 1);
-
-        const capacity = targetRoom.capacity || 2;
-        const canGetIn = occupantsCount < capacity;
-
-        saveLocalRoom({
-          ...targetRoom,
-          status: 'OCCUPIED',
-          current_occupancy: occupantsCount,
-          can_someone_get_in: canGetIn,
-        });
-      }
-    }
+    syncLocalRoomOccupancy(tenant.room_id, newTenants);
+  }
+  // Sync occupancy for the previous room if tenant changed rooms
+  if (oldRoomId && oldRoomId !== tenant.room_id) {
+    syncLocalRoomOccupancy(oldRoomId, newTenants);
   }
 
   notifyDataChange();
@@ -159,18 +150,9 @@ export function deleteLocalTenant(tenantId: string): Tenant[] {
     localStorage.setItem(TENANTS_STORAGE_KEY, JSON.stringify(newTenants));
   }
 
-  // Free up room when tenant is deleted
+  // Accurately recalculate room occupancy when tenant is removed
   if (toDelete?.room_id) {
-    const rooms = getLocalRooms();
-    const targetRoom = rooms.find((r) => r.id === toDelete.room_id);
-    if (targetRoom) {
-      saveLocalRoom({
-        ...targetRoom,
-        status: 'VACANT',
-        current_occupancy: 0,
-        can_someone_get_in: true,
-      });
-    }
+    syncLocalRoomOccupancy(toDelete.room_id, newTenants);
   }
 
   notifyDataChange();
@@ -191,7 +173,12 @@ export function getLocalPayments(): Payment[] {
 
 export function saveLocalPayment(payment: Payment): Payment[] {
   const payments = getLocalPayments();
-  const index = payments.findIndex((p) => p.id === payment.id);
+  const targetMonth = (payment.billing_period_month || '').slice(0, 7);
+  const index = payments.findIndex((p) => {
+    if (p.id === payment.id) return true;
+    const pMonth = (p.billing_period_month || '').slice(0, 7);
+    return Boolean(p.tenant_id && p.tenant_id === payment.tenant_id && targetMonth && pMonth === targetMonth);
+  });
   let newPayments: Payment[];
   if (index >= 0) {
     newPayments = [...payments];
@@ -267,8 +254,8 @@ export function getLandlordProfile(): LandlordProfile {
       phone: parsed.phone === '+91 98765 43210' ? '' : (parsed.phone || ''),
       email: parsed.email === 'owner@rentvault.com' ? '' : (parsed.email || ''),
       upiId: parsed.upiId === 'landlord@upi' ? '' : (parsed.upiId || ''),
-      propertyName: parsed.propertyName || 'RentVault (6 Units)',
-      address: parsed.address || 'G1, 2A, 2B, 3A, 3B, P1',
+      propertyName: parsed.propertyName || DEFAULT_LANDLORD_PROFILE.propertyName,
+      address: parsed.address || DEFAULT_LANDLORD_PROFILE.address,
     };
     return cleaned;
   } catch {

@@ -4,10 +4,10 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { 
   Users, Plus, Phone, ArrowLeft, Mail, Calendar, 
-  GraduationCap, Edit3, Trash2, CreditCard 
+  GraduationCap, Edit3, Trash2, CreditCard, LogOut 
 } from 'lucide-react';
 import { Tenant, Room, Payment } from '@/types/database';
-import { getLocalTenants, deleteLocalTenant, getLocalRooms } from '@/lib/store/app-store';
+import { getLocalTenants, deleteLocalTenant, getLocalRooms, saveLocalTenant } from '@/lib/store/app-store';
 import { createClient } from '@/lib/supabase/client';
 import EditTenantModal from '@/components/tenants/edit-tenant-modal';
 import RecordPaymentModal from '@/components/payments/record-payment-modal';
@@ -20,6 +20,7 @@ export default function TenantsPage() {
   const [editingPayment, setEditingPayment] = useState<Payment | null>(null);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [filterType, setFilterType] = useState<'ALL' | 'BACHELORS' | 'FAMILY'>('ALL');
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'MOVED_OUT'>('ALL');
 
   useEffect(() => {
     async function loadData() {
@@ -78,9 +79,44 @@ export default function TenantsPage() {
     }
   };
 
+  const handleMarkMovedOut = async (tenant: Tenant) => {
+    if (confirm(`Mark "${tenant.full_name}" as Moved Out? This will record today's date as the move-out date and free up room vacancy.`)) {
+      const today = new Date().toISOString().split('T')[0];
+      const updatedTenant: Tenant = {
+        ...tenant,
+        status: 'MOVED_OUT',
+        actual_move_out_date: today,
+        updated_at: new Date().toISOString(),
+      };
+      saveLocalTenant(updatedTenant);
+      setTenants((prev) => prev.map((t) => (t.id === tenant.id ? updatedTenant : t)));
+      setRooms(getLocalRooms());
+
+      try {
+        const supabase = createClient();
+        await supabase
+          .from('tenants')
+          .update({
+            status: 'MOVED_OUT',
+            actual_move_out_date: today,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', tenant.id);
+      } catch (err) {
+        console.warn('Supabase move-out update note:', err);
+      }
+    }
+  };
+
   const filteredTenants = tenants.filter((t) => {
-    if (filterType === 'ALL') return true;
-    return t.tenant_type === filterType;
+    const matchesCategory = filterType === 'ALL' || t.tenant_type === filterType;
+    const matchesStatus =
+      statusFilter === 'ALL'
+        ? true
+        : statusFilter === 'ACTIVE'
+        ? t.status === 'ACTIVE' || t.status === 'NOTICE_PERIOD'
+        : t.status === 'MOVED_OUT';
+    return matchesCategory && matchesStatus;
   });
 
   return (
@@ -102,14 +138,36 @@ export default function TenantsPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Status Filter */}
+          <div className="flex items-center bg-slate-100 p-1 rounded-lg border border-slate-300 text-xs font-bold text-slate-700">
+            <button
+              onClick={() => setStatusFilter('ALL')}
+              className={`px-3 py-1 rounded-md transition-colors cursor-pointer ${statusFilter === 'ALL' ? 'bg-white shadow-xs text-indigo-700' : 'hover:text-slate-900'}`}
+            >
+              All Status
+            </button>
+            <button
+              onClick={() => setStatusFilter('ACTIVE')}
+              className={`px-3 py-1 rounded-md transition-colors cursor-pointer ${statusFilter === 'ACTIVE' ? 'bg-white shadow-xs text-emerald-700' : 'hover:text-slate-900'}`}
+            >
+              Active
+            </button>
+            <button
+              onClick={() => setStatusFilter('MOVED_OUT')}
+              className={`px-3 py-1 rounded-md transition-colors cursor-pointer ${statusFilter === 'MOVED_OUT' ? 'bg-white shadow-xs text-slate-700' : 'hover:text-slate-900'}`}
+            >
+              Vacated
+            </button>
+          </div>
+
           {/* Category Filter */}
           <div className="flex items-center bg-slate-100 p-1 rounded-lg border border-slate-300 text-xs font-bold text-slate-700">
             <button
               onClick={() => setFilterType('ALL')}
               className={`px-3 py-1 rounded-md transition-colors cursor-pointer ${filterType === 'ALL' ? 'bg-white shadow-xs text-indigo-700' : 'hover:text-slate-900'}`}
             >
-              All ({tenants.length})
+              All Types ({tenants.length})
             </button>
             <button
               onClick={() => setFilterType('BACHELORS')}
@@ -182,9 +240,11 @@ export default function TenantsPage() {
                       <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
                         t.status === 'ACTIVE'
                           ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                          : 'bg-amber-100 text-amber-800 border border-amber-300'
+                          : t.status === 'NOTICE_PERIOD'
+                          ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                          : 'bg-slate-100 text-slate-700 border border-slate-300'
                       }`}>
-                        {t.status}
+                        {t.status.replace('_', ' ')}
                       </span>
                     </div>
                   </div>
@@ -306,16 +366,29 @@ export default function TenantsPage() {
                   </div>
 
                   <div className="flex items-center gap-1.5">
+                    {t.status !== 'MOVED_OUT' && (
+                      <button
+                        type="button"
+                        onClick={() => handleMarkMovedOut(t)}
+                        className="inline-flex items-center gap-1 font-bold text-amber-900 hover:text-amber-950 bg-amber-50 hover:bg-amber-100 px-2.5 py-1 rounded-lg border border-amber-300 transition-colors cursor-pointer"
+                        title="Mark tenant as moved out and free up room vacancy"
+                      >
+                        <LogOut className="w-3.5 h-3.5" /> Move Out
+                      </button>
+                    )}
+
                     <button
                       type="button"
                       onClick={() => {
                         const roomObj = rooms.find((r) => r.id === t.room_id) || t.room || undefined;
-                        const monthStr = new Date().toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+                        const now = new Date();
+                        const currentMonthIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+                        const monthStr = now.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
                         setEditingPayment({
                           id: `pay-${Date.now()}`,
                           tenant_id: t.id,
                           room_id: t.room_id || '',
-                          billing_period_month: monthStr,
+                          billing_period_month: currentMonthIso,
                           billing_month: monthStr,
                           amount_due: Number(t.monthly_rent),
                           amount_paid: Number(t.monthly_rent),
