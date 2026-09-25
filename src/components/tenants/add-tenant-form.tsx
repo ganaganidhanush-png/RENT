@@ -328,13 +328,25 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
           saveLocalPayment(depositPayment);
         }
 
-        // Auto-create initial billing payment entry for the tenant's upcoming monthly rent
+        // Determine first monthly rent cycle:
+        // Policy: If tenant came this month (or in future), first monthly rent is taken next month!
+        const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        const moveInYM = (formData.moveInDate || '').slice(0, 7);
+        const isMoveInThisMonth = !moveInYM || moveInYM >= currentYearMonth;
+
+        const targetRentDate = isMoveInThisMonth
+          ? new Date(now.getFullYear(), now.getMonth() + 1, 1)
+          : now;
+        const targetRentMonthIso = `${targetRentDate.getFullYear()}-${String(targetRentDate.getMonth() + 1).padStart(2, '0')}-01`;
+        const targetRentMonthName = targetRentDate.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+
+        // Auto-create initial billing payment entry for the tenant's first monthly rent cycle
         const initialPayment: Payment = {
           id: `pay-${Date.now() + 1}`,
           tenant_id: generatedId,
           room_id: formData.roomId,
-          billing_period_month: currentMonthIso,
-          billing_month: currentMonthName,
+          billing_period_month: targetRentMonthIso,
+          billing_month: targetRentMonthName,
           amount_due: Number(formData.monthlyRent),
           amount_paid: 0,
           amount_pending: Number(formData.monthlyRent),
@@ -343,6 +355,9 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
           payment_method: 'UPI',
           payment_type: 'RENT',
           received_by: 'LANDLORD',
+          notes: isMoveInThisMonth 
+            ? `1st Monthly Rent (New move-in in ${currentMonthName} • Rent due in ${targetRentMonthName})`
+            : 'Upcoming Monthly Rent',
           created_at: new Date().toISOString(),
           tenant: newTenant,
           room: selectedRoom,
@@ -824,6 +839,33 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
               </p>
             </div>
           </div>
+
+          {/* Move-in Rent Policy Notice */}
+          {(() => {
+            if (!formData.moveInDate) return null;
+            const now = new Date();
+            const currentYM = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+            const moveInYM = formData.moveInDate.slice(0, 7);
+            if (moveInYM >= currentYM) {
+              const [y, m] = moveInYM.split('-').map(Number);
+              const nextDate = new Date(y, m, 1);
+              const nextMonthName = nextDate.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+              return (
+                <div className="p-3 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl text-blue-900 text-xs font-semibold flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                  <div className="flex items-center gap-2">
+                    <span className="p-1 rounded-md bg-blue-100 text-blue-700 font-bold shrink-0">✨ Move-In Policy</span>
+                    <span>
+                      Move-in is in <strong>{new Date(formData.moveInDate).toLocaleString('en-IN', { month: 'long', year: 'numeric' })}</strong>. Per policy, the 1st monthly rent will be collected next month (<strong>{nextMonthName}</strong> on day {formData.rentDueDay || 5}).
+                    </span>
+                  </div>
+                  <span className="inline-flex items-center gap-1 text-[11px] font-bold text-blue-800 bg-blue-100 border border-blue-300 px-2.5 py-1 rounded-lg shrink-0">
+                    🗓️ 1st Rent in {nextMonthName.split(' ')[0]}
+                  </span>
+                </div>
+              );
+            }
+            return null;
+          })()}
         </div>
 
         {/* Step 3: Dynamic Members Staying in Room */}

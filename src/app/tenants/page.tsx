@@ -5,17 +5,20 @@ import Link from 'next/link';
 import { 
   Users, Plus, Phone, ArrowLeft, Mail, Calendar, 
   GraduationCap, Edit3, Trash2, CreditCard, LogOut, Sparkles,
-  FileText, Eye, ShieldCheck
+  FileText, Eye, ShieldCheck, CheckCircle2, Clock, AlertCircle
 } from 'lucide-react';
 import { Tenant, Room, Payment, DocumentRecord } from '@/types/database';
 import { 
   getLocalTenants, deleteLocalTenant, getLocalRooms, saveLocalTenant,
-  getLocalPayments, getLocalDocuments, mergeTenants, mergeRooms 
+  getLocalPayments, getLocalDocuments, mergeTenants, mergeRooms,
+  getTenantAdvanceSummary, AdvanceTrackingSummary, isTenantMoveInThisMonth,
+  getNextYearMonth, getDefaultRentBillingMonth 
 } from '@/lib/store/app-store';
 import { createClient } from '@/lib/supabase/client';
 import EditTenantModal from '@/components/tenants/edit-tenant-modal';
 import RecordPaymentModal from '@/components/payments/record-payment-modal';
 import DocumentViewerModal from '@/components/documents/document-viewer-modal';
+import AdvanceDepositModal from '@/components/tenants/advance-deposit-modal';
 
 function getOrdinal(d: number) {
   if (d > 3 && d < 21) return 'th';
@@ -38,6 +41,12 @@ export default function TenantsPage() {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingPayment, setEditingPayment] = useState<Payment | null>(null);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [selectedTenantForAdvance, setSelectedTenantForAdvance] = useState<{
+    tenant: Tenant;
+    room?: Room | null;
+    summary: AdvanceTrackingSummary;
+  } | null>(null);
+  const [isAdvanceModalOpen, setIsAdvanceModalOpen] = useState(false);
   const [filterType, setFilterType] = useState<'ALL' | 'BACHELORS' | 'FAMILY'>('ALL');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'MOVED_OUT'>('ALL');
 
@@ -119,6 +128,36 @@ export default function TenantsPage() {
         console.warn('Supabase delete note:', err);
       }
     }
+  };
+
+  const handleRecordAdvancePiece = (tenant: Tenant, remaining: number) => {
+    setIsAdvanceModalOpen(false);
+    const roomObj = rooms.find((r) => r.id === tenant.room_id) || tenant.room || undefined;
+    const now = new Date();
+    const currentMonthIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    const monthStr = now.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+    const agreedTotal = Number(tenant.security_deposit_paid || roomObj?.security_deposit || 20000);
+    setEditingPayment({
+      id: `pay-advance-${Date.now()}`,
+      tenant_id: tenant.id,
+      room_id: tenant.room_id || '',
+      payment_type: 'SECURITY_DEPOSIT',
+      total_target_amount: agreedTotal,
+      billing_period_month: currentMonthIso,
+      billing_month: monthStr,
+      amount_due: remaining,
+      amount_paid: remaining,
+      amount_pending: 0,
+      payment_status: 'PAID',
+      payment_date: new Date().toISOString().split('T')[0],
+      payment_method: 'UPI',
+      received_by: 'LANDLORD',
+      notes: `Advance Deposit Collection for ${tenant.full_name}`,
+      created_at: new Date().toISOString(),
+      tenant,
+      room: roomObj,
+    });
+    setIsPaymentModalOpen(true);
   };
 
   const handleMarkMovedOut = async (tenant: Tenant) => {
@@ -508,73 +547,173 @@ export default function TenantsPage() {
                   })()}
                 </div>
 
-                {/* Card Footer: Financials & Actions */}
-                <div className="mt-4 pt-3 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
-                  <div>
-                    <span className="font-black text-slate-900 text-sm">
-                      ₹{Number(t.monthly_rent).toLocaleString('en-IN')}
-                      <span className="font-normal text-slate-500 text-xs"> /mo</span>
-                    </span>
-                    <span className="text-[11px] font-bold text-indigo-800 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded ml-2">
-                      Rent Due: {t.rent_due_day || 5}{getOrdinal(t.rent_due_day || 5)}
-                    </span>
-                  </div>
+                {/* One-Time Advance Deposit & Move-In Rent Policy */}
+                {(() => {
+                  const roomObj = rooms.find((r) => r.id === t.room_id) || t.room || undefined;
+                  const advanceSummary = getTenantAdvanceSummary(t, roomObj, payments);
+                  const now = new Date();
+                  const currentYM = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+                  const isNewThisMonth = isTenantMoveInThisMonth(t.move_in_date, currentYM);
+                  const nextMonthDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+                  const nextMonthName = nextMonthDate.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+                  const nextMonthShort = nextMonthDate.toLocaleString('en-IN', { month: 'short' });
 
-                  <div className="flex items-center gap-1.5">
-                    {t.status !== 'MOVED_OUT' && (
-                      <button
-                        type="button"
-                        onClick={() => handleMarkMovedOut(t)}
-                        className="inline-flex items-center gap-1 font-bold text-amber-900 hover:text-amber-950 bg-amber-50 hover:bg-amber-100 px-2.5 py-1 rounded-lg border border-amber-300 transition-colors cursor-pointer"
-                        title="Mark tenant as moved out and free up room vacancy"
-                      >
-                        <LogOut className="w-3.5 h-3.5" /> Move Out
-                      </button>
-                    )}
+                  return (
+                    <div className="mt-3.5 space-y-2.5">
+                      {/* One-Time Advance Security Deposit Tracker */}
+                      <div className="p-3 bg-slate-50 border border-slate-200/90 rounded-xl space-y-2 text-xs">
+                        <div className="flex flex-wrap items-center justify-between gap-1.5">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold text-slate-700 flex items-center gap-1">
+                              <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" />
+                              One-Time Advance:
+                            </span>
+                            <span className="font-black text-slate-900">
+                              ₹{advanceSummary.totalPaid.toLocaleString('en-IN')} / ₹{advanceSummary.agreedAdvance.toLocaleString('en-IN')}
+                            </span>
+                          </div>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const roomObj = rooms.find((r) => r.id === t.room_id) || t.room || undefined;
-                        const now = new Date();
-                        const currentMonthIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-                        const monthStr = now.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
-                        setEditingPayment({
-                          id: `pay-${Date.now()}`,
-                          tenant_id: t.id,
-                          room_id: t.room_id || '',
-                          payment_type: 'RENT',
-                          total_target_amount: Number(t.monthly_rent),
-                          billing_period_month: currentMonthIso,
-                          billing_month: monthStr,
-                          amount_due: Number(t.monthly_rent),
-                          amount_paid: Number(t.monthly_rent),
-                          amount_pending: 0,
-                          payment_status: 'PAID',
-                          payment_date: new Date().toISOString().split('T')[0],
-                          payment_method: 'UPI',
-                          received_by: 'LANDLORD',
-                          created_at: new Date().toISOString(),
-                          tenant: t,
-                          room: roomObj,
-                        });
-                        setIsPaymentModalOpen(true);
-                      }}
-                      className="inline-flex items-center gap-1 font-bold text-emerald-800 hover:text-emerald-950 bg-emerald-100 hover:bg-emerald-200 px-2.5 py-1 rounded-lg border border-emerald-300 transition-colors cursor-pointer"
-                      title="Record rent payment for this tenant"
-                    >
-                      <CreditCard className="w-3.5 h-3.5" /> + Payment
-                    </button>
+                          <div>
+                            {advanceSummary.isFullyPaid ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedTenantForAdvance({ tenant: t, room: roomObj, summary: advanceSummary });
+                                  setIsAdvanceModalOpen(true);
+                                }}
+                                className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 hover:bg-emerald-200 border border-emerald-300 transition-colors cursor-pointer"
+                                title="Advance is fully paid in count. Click to view dates and receipt slices."
+                              >
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Done ({advanceSummary.piecesCount} piece{advanceSummary.piecesCount !== 1 ? 's' : ''})
+                              </button>
+                            ) : advanceSummary.totalPaid > 0 ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedTenantForAdvance({ tenant: t, room: roomObj, summary: advanceSummary });
+                                  setIsAdvanceModalOpen(true);
+                                }}
+                                className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 hover:bg-amber-200 border border-amber-300 transition-colors cursor-pointer"
+                                title="Advance paid partially in slices. Click to view pieces or collect balance."
+                              >
+                                <Clock className="w-3 h-3 text-amber-600" /> Partial (₹{advanceSummary.remainingUnpaid.toLocaleString('en-IN')} Due)
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedTenantForAdvance({ tenant: t, room: roomObj, summary: advanceSummary });
+                                  setIsAdvanceModalOpen(true);
+                                }}
+                                className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 hover:bg-rose-200 border border-rose-300 transition-colors cursor-pointer"
+                                title="Advance not paid. Click to record upfront advance."
+                              >
+                                <AlertCircle className="w-3 h-3 text-rose-600" /> Not Paid (₹{advanceSummary.agreedAdvance.toLocaleString('en-IN')} Due)
+                              </button>
+                            )}
+                          </div>
+                        </div>
 
-                    <button
-                      type="button"
-                      onClick={() => handleEditClick(t)}
-                      className="inline-flex items-center gap-1 font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded-lg border border-indigo-200 transition-colors cursor-pointer"
-                    >
-                      <Edit3 className="w-3.5 h-3.5" /> Edit Profile
-                    </button>
-                  </div>
-                </div>
+                        <div className="flex items-center justify-between text-[11px] text-slate-500 font-medium">
+                          <span>
+                            {advanceSummary.isFullyPaid
+                              ? `Advance complete${advanceSummary.latestPaymentDate ? ` on ${new Date(advanceSummary.latestPaymentDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}` : ''}. No more advance due.`
+                              : advanceSummary.totalPaid > 0
+                                ? `Paid across ${advanceSummary.piecesCount} piece${advanceSummary.piecesCount !== 1 ? 's' : ''}. ₹${advanceSummary.remainingUnpaid.toLocaleString('en-IN')} pending.`
+                                : 'Full security deposit pending at move-in.'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedTenantForAdvance({ tenant: t, room: roomObj, summary: advanceSummary });
+                              setIsAdvanceModalOpen(true);
+                            }}
+                            className="text-indigo-600 hover:text-indigo-800 font-bold hover:underline cursor-pointer"
+                          >
+                            Details →
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Card Footer: Monthly Rent & Quick Actions */}
+                      <div className="pt-2 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <div className="flex items-center flex-wrap gap-1.5">
+                          <span className="font-black text-slate-900 text-sm">
+                            ₹{Number(t.monthly_rent).toLocaleString('en-IN')}
+                            <span className="font-normal text-slate-500 text-xs"> /mo</span>
+                          </span>
+                          <span className="text-[11px] font-bold text-indigo-800 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded">
+                            Due: {t.rent_due_day || 5}{getOrdinal(t.rent_due_day || 5)}
+                          </span>
+                          {isNewThisMonth && (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-blue-800 bg-blue-100 border border-blue-200 px-2 py-0.5 rounded" title={`Tenant moved in this month (${t.move_in_date}). Per policy, 1st rent will be taken next month (${nextMonthName}).`}>
+                              ✨ 1st Rent in {nextMonthShort}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          {t.status !== 'MOVED_OUT' && (
+                            <button
+                              type="button"
+                              onClick={() => handleMarkMovedOut(t)}
+                              className="inline-flex items-center gap-1 font-bold text-amber-900 hover:text-amber-950 bg-amber-50 hover:bg-amber-100 px-2.5 py-1 rounded-lg border border-amber-300 transition-colors cursor-pointer"
+                              title="Mark tenant as moved out and free up room vacancy"
+                            >
+                              <LogOut className="w-3.5 h-3.5" /> Move Out
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const targetDate = isNewThisMonth 
+                                ? new Date(now.getFullYear(), now.getMonth() + 1, 1) 
+                                : now;
+                              const targetMonthIso = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}-01`;
+                              const monthStr = targetDate.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+                              setEditingPayment({
+                                id: `pay-${Date.now()}`,
+                                tenant_id: t.id,
+                                room_id: t.room_id || '',
+                                payment_type: 'RENT',
+                                total_target_amount: Number(t.monthly_rent),
+                                billing_period_month: targetMonthIso,
+                                billing_month: monthStr,
+                                amount_due: Number(t.monthly_rent),
+                                amount_paid: Number(t.monthly_rent),
+                                amount_pending: 0,
+                                payment_status: 'PAID',
+                                payment_date: new Date().toISOString().split('T')[0],
+                                payment_method: 'UPI',
+                                received_by: 'LANDLORD',
+                                notes: isNewThisMonth 
+                                  ? `1st Monthly Rent (New move-in in ${now.toLocaleString('en-IN', { month: 'short' })} • Rent for ${monthStr})`
+                                  : 'Monthly Rent',
+                                created_at: new Date().toISOString(),
+                                tenant: t,
+                                room: roomObj,
+                              });
+                              setIsPaymentModalOpen(true);
+                            }}
+                            className="inline-flex items-center gap-1 font-bold text-emerald-800 hover:text-emerald-950 bg-emerald-100 hover:bg-emerald-200 px-2.5 py-1 rounded-lg border border-emerald-300 transition-colors cursor-pointer"
+                            title="Record rent payment for this tenant"
+                          >
+                            <CreditCard className="w-3.5 h-3.5" /> + Payment
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleEditClick(t)}
+                            className="inline-flex items-center gap-1 font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded-lg border border-indigo-200 transition-colors cursor-pointer"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" /> Edit Profile
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             );
           })}
@@ -620,6 +759,19 @@ export default function TenantsPage() {
           setIsViewerOpen(false);
           setViewingDoc(null);
         }}
+      />
+
+      {/* Advance Deposit Breakdown Modal */}
+      <AdvanceDepositModal
+        isOpen={isAdvanceModalOpen}
+        onClose={() => {
+          setIsAdvanceModalOpen(false);
+          setSelectedTenantForAdvance(null);
+        }}
+        tenant={selectedTenantForAdvance?.tenant || null}
+        room={selectedTenantForAdvance?.room || null}
+        summary={selectedTenantForAdvance?.summary || null}
+        onRecordAdvancePiece={handleRecordAdvancePiece}
       />
     </div>
   );

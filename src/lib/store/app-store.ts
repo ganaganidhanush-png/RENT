@@ -401,3 +401,128 @@ export function saveLandlordProfile(profile: Partial<LandlordProfile>): Landlord
   notifyDataChange();
   return updated;
 }
+
+// ==================== RENT CYCLE & MOVE-IN POLICY ====================
+
+/**
+ * Returns true if a tenant moved in during the given target month or in the future.
+ * Under standard policy: If a tenant moved in this month, their monthly rent is taken next month.
+ */
+export function isTenantMoveInThisMonth(
+  tenantOrMoveInDate?: Tenant | string | null,
+  targetYearMonth?: string
+): boolean {
+  if (!tenantOrMoveInDate) return false;
+  const moveInStr = typeof tenantOrMoveInDate === 'string'
+    ? tenantOrMoveInDate
+    : tenantOrMoveInDate.move_in_date;
+  if (!moveInStr) return false;
+  const moveInYM = moveInStr.slice(0, 7);
+  const currentYM = targetYearMonth || new Date().toISOString().slice(0, 7);
+  return moveInYM >= currentYM;
+}
+
+/**
+ * Given a year-month string 'YYYY-MM', returns the subsequent month 'YYYY-MM'.
+ */
+export function getNextYearMonth(yearMonth?: string): string {
+  const base = yearMonth && /^\d{4}-\d{2}$/.test(yearMonth)
+    ? new Date(Number(yearMonth.slice(0, 4)), Number(yearMonth.slice(5, 7)) - 1, 1)
+    : new Date();
+  const nextDate = new Date(base.getFullYear(), base.getMonth() + 1, 1);
+  return `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, '0')}`;
+}
+
+/**
+ * Determines the default billing month for rent payments for a tenant.
+ * If the tenant moved in during the current month (or future), their first rent
+ * cycle starts next month. Otherwise, it defaults to the current month.
+ */
+export function getDefaultRentBillingMonth(tenant?: Tenant | null, currentYearMonth?: string): string {
+  const currentYM = currentYearMonth || new Date().toISOString().slice(0, 7);
+  if (!tenant?.move_in_date) return currentYM;
+  if (isTenantMoveInThisMonth(tenant.move_in_date, currentYM)) {
+    return getNextYearMonth(tenant.move_in_date.slice(0, 7));
+  }
+  return currentYM;
+}
+
+// ==================== ADVANCE / SECURITY DEPOSIT TRACKING ====================
+
+export interface AdvancePiece {
+  id: string;
+  amount: number;
+  payment_date: string;
+  payment_method: string;
+  installment_number: number;
+  notes?: string | null;
+  transaction_ref?: string | null;
+}
+
+export interface AdvanceTrackingSummary {
+  agreedAdvance: number;
+  totalPaid: number;
+  remainingUnpaid: number;
+  isFullyPaid: boolean;
+  status: 'FULLY_PAID' | 'PARTIALLY_PAID' | 'UNPAID';
+  piecesCount: number;
+  pieces: AdvancePiece[];
+  latestPaymentDate?: string | null;
+}
+
+/**
+ * Computes the one-time advance / security deposit status for a tenant.
+ * Determines whether advance was paid in full (Done), partially paid across pieces/dates,
+ * or still unpaid, with complete itemization of each piece.
+ */
+export function getTenantAdvanceSummary(
+  tenant: Tenant,
+  room?: Room | null,
+  allPayments?: Payment[]
+): AdvanceTrackingSummary {
+  const agreedAdvance = Number(tenant.security_deposit_paid || room?.security_deposit || 20000);
+  const paymentsList = allPayments || getLocalPayments();
+  
+  const advancePayments = paymentsList
+    .filter(
+      (p) =>
+        p.tenant_id === tenant.id &&
+        p.payment_type === 'SECURITY_DEPOSIT' &&
+        Number(p.amount_paid) > 0
+    )
+    .sort((a, b) => new Date(a.payment_date || a.created_at || '').getTime() - new Date(b.payment_date || b.created_at || '').getTime());
+
+  const totalPaid = advancePayments.reduce((sum, p) => sum + Number(p.amount_paid || 0), 0);
+  const remainingUnpaid = Math.max(0, agreedAdvance - totalPaid);
+  const isFullyPaid = totalPaid >= agreedAdvance && agreedAdvance > 0;
+
+  const status: 'FULLY_PAID' | 'PARTIALLY_PAID' | 'UNPAID' = 
+    isFullyPaid 
+      ? 'FULLY_PAID' 
+      : totalPaid > 0 
+        ? 'PARTIALLY_PAID' 
+        : 'UNPAID';
+
+  const pieces: AdvancePiece[] = advancePayments.map((p, idx) => ({
+    id: p.id,
+    amount: Number(p.amount_paid || 0),
+    payment_date: p.payment_date || (p.created_at ? p.created_at.slice(0, 10) : 'Move-in'),
+    payment_method: p.payment_method || 'UPI',
+    installment_number: p.installment_number || idx + 1,
+    notes: p.notes || null,
+    transaction_ref: p.transaction_ref || null,
+  }));
+
+  const latestPaymentDate = pieces.length > 0 ? pieces[pieces.length - 1].payment_date : null;
+
+  return {
+    agreedAdvance,
+    totalPaid,
+    remainingUnpaid,
+    isFullyPaid,
+    status,
+    piecesCount: pieces.length,
+    pieces,
+    latestPaymentDate,
+  };
+}

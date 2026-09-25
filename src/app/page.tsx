@@ -46,7 +46,13 @@ export default async function DashboardPage() {
 
     if (dbTenants && dbTenants.length > 0) {
       allTenants = dbTenants;
-      totalRentExpected = dbTenants.reduce((acc, t) => acc + Number(t.monthly_rent || 0), 0);
+      const currentYearMonth = new Date().toISOString().slice(0, 7);
+      // Tenants who joined this month have their first rent taken next month
+      const rentEligibleTenants = dbTenants.filter((t) => {
+        const moveInYM = (t.move_in_date || '').slice(0, 7);
+        return !moveInYM || moveInYM < currentYearMonth;
+      });
+      totalRentExpected = rentEligibleTenants.reduce((acc, t) => acc + Number(t.monthly_rent || 0), 0);
 
       // Dynamically re-evaluate room occupancy from active tenants so server render is always accurate
       rooms = rooms.map((r) => {

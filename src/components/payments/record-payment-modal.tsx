@@ -4,10 +4,13 @@ import React, { useState, useEffect } from 'react';
 import { 
   X, IndianRupee, User, Building2, Calendar, 
   CheckCircle2, Save, CreditCard, Tag, FileText, UserCheck,
-  Sparkles, Layers
+  Sparkles, Layers, AlertCircle, Clock, Check, ShieldCheck
 } from 'lucide-react';
 import { Payment, Tenant, Room, PaymentMethod, PaymentStatus, PaymentReceiver, PaymentType } from '@/types/database';
-import { getLocalTenants, getLocalRooms, getLocalPayments, saveLocalPayment, getLandlordProfile } from '@/lib/store/app-store';
+import { 
+  getLocalTenants, getLocalRooms, getLocalPayments, saveLocalPayment, 
+  getLandlordProfile, isTenantMoveInThisMonth, getNextYearMonth, getDefaultRentBillingMonth 
+} from '@/lib/store/app-store';
 import { createClient } from '@/lib/supabase/client';
 
 const CATEGORY_OPTIONS: { value: PaymentType; label: string; icon: string; desc: string }[] = [
@@ -128,7 +131,9 @@ export default function RecordPaymentModal({
       setBillingMonthYear(
         payment?.billing_period_month && /^\d{4}-\d{2}/.test(payment.billing_period_month)
           ? payment.billing_period_month.slice(0, 7)
-          : defaultYearMonth()
+          : (activeT && (payment?.payment_type || 'RENT') === 'RENT'
+              ? getDefaultRentBillingMonth(activeT)
+              : defaultYearMonth())
       );
       setAmountDue(String(defaultDue));
       setAmountPaid(String(payment?.amount_paid ?? defaultDue));
@@ -184,6 +189,9 @@ export default function RecordPaymentModal({
     setPaymentType(newType);
     
     if (newType === 'RENT') {
+      if (activeTenant) {
+        setBillingMonthYear(getDefaultRentBillingMonth(activeTenant));
+      }
       const remaining = remainingRentToCollect > 0 ? remainingRentToCollect : targetRentTotal;
       if (remaining > 0) {
         setAmountDue(String(remaining));
@@ -269,9 +277,12 @@ export default function RecordPaymentModal({
       const chosenTargetAdvance = Number(chosen.security_deposit_paid || 20000);
       const chosenRemainingAdvance = Math.max(0, chosenTargetAdvance - chosenAdvancePaid);
 
-      if (paymentType === 'RENT' && chosen.monthly_rent) {
-        setAmountDue(String(chosen.monthly_rent));
-        setAmountPaid(String(chosen.monthly_rent));
+      if (paymentType === 'RENT') {
+        setBillingMonthYear(getDefaultRentBillingMonth(chosen));
+        if (chosen.monthly_rent) {
+          setAmountDue(String(chosen.monthly_rent));
+          setAmountPaid(String(chosen.monthly_rent));
+        }
       } else if (paymentType === 'SECURITY_DEPOSIT') {
         const amt = chosenRemainingAdvance > 0 ? chosenRemainingAdvance : chosenTargetAdvance;
         setAmountDue(String(amt));
@@ -542,6 +553,14 @@ export default function RecordPaymentModal({
               <span className="text-[10px] text-slate-500 font-medium mt-0.5 block">
                 Period: {new Date(`${billingMonthYear}-15`).toLocaleString('en-IN', { month: 'long', year: 'numeric' })}
               </span>
+              {paymentType === 'RENT' && activeTenant && isTenantMoveInThisMonth(activeTenant) && (
+                <div className="mt-1.5 p-2 bg-blue-50 border border-blue-200 rounded-lg text-blue-900 text-[11px] font-medium flex items-center gap-1.5">
+                  <span className="font-bold bg-blue-200 text-blue-900 px-1.5 py-0.5 rounded text-[10px] shrink-0">
+                    ✨ Move-In Policy
+                  </span>
+                  <span>Joined {activeTenant.move_in_date || 'this month'}. First monthly rent is scheduled for next month.</span>
+                </div>
+              )}
             </div>
 
             <div>
@@ -555,91 +574,187 @@ export default function RecordPaymentModal({
             </div>
           </div>
 
-          {/* Smart Advance / Security Deposit Slices Tracker */}
+          {/* Smart Advance / Security Deposit (One-Time Payment Tracker) */}
           {paymentType === 'SECURITY_DEPOSIT' && (
-            <div className="p-4 bg-gradient-to-br from-amber-50 to-orange-50/50 border-2 border-amber-300 rounded-xl space-y-3">
+            <div className="p-4 bg-gradient-to-br from-purple-50 via-amber-50/40 to-orange-50/50 border-2 border-purple-300 rounded-xl space-y-3">
+              {/* Advance Header */}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <span className="p-1 rounded-md bg-amber-600 text-white">
-                    <Sparkles className="w-3.5 h-3.5" />
+                  <span className="p-1 rounded-md bg-purple-700 text-white">
+                    <ShieldCheck className="w-4 h-4" />
                   </span>
                   <div>
-                    <span className="text-xs font-black text-amber-950 uppercase tracking-wide block">
-                      Smart Advance / Deposit Slices
+                    <span className="text-xs font-black text-purple-950 uppercase tracking-wide block">
+                      One-Time Advance Deposit Tracker
                     </span>
-                    <span className="text-[11px] text-amber-800 font-medium">
-                      Tracking installment #{nextAdvanceSliceIndex} for {activeTenant?.full_name || 'Tenant'}
+                    <span className="text-[11px] text-purple-800 font-medium">
+                      One-time move-in capital, separate from monthly recurring rent
                     </span>
                   </div>
                 </div>
-                <span className="text-xs font-black text-amber-950 bg-white px-2.5 py-1 rounded-lg border border-amber-200 shadow-2xs">
+                <span className="text-xs font-black text-purple-950 bg-white px-2.5 py-1 rounded-lg border border-purple-200 shadow-2xs">
                   Agreed Total: ₹{targetAdvanceTotal.toLocaleString('en-IN')}
                 </span>
               </div>
 
+              {/* Did they pay or not? Status Banner */}
+              {targetAdvanceTotal > 0 && totalAdvanceCollectedSoFar >= targetAdvanceTotal ? (
+                <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                    <div>
+                      <p className="text-xs font-black text-emerald-950">
+                        Advance Status: FULLY PAID (Done ✓)
+                      </p>
+                      <p className="text-[11px] text-emerald-800">
+                        The entire agreed advance of ₹{targetAdvanceTotal.toLocaleString('en-IN')} was collected across {pastAdvancePayments.length} piece{pastAdvancePayments.length > 1 ? 's' : ''}.
+                      </p>
+                    </div>
+                  </div>
+                  <span className="px-2.5 py-1 bg-emerald-600 text-white text-[11px] font-black rounded-lg shrink-0">
+                    Done ✓
+                  </span>
+                </div>
+              ) : totalAdvanceCollectedSoFar > 0 ? (
+                <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Clock className="w-5 h-5 text-amber-600 shrink-0" />
+                    <div>
+                      <p className="text-xs font-black text-amber-950">
+                        Advance Status: PARTIALLY PAID IN PIECES ({pastAdvancePayments.length} piece{pastAdvancePayments.length > 1 ? 's' : ''} paid)
+                      </p>
+                      <p className="text-[11px] text-amber-800">
+                        ₹{totalAdvanceCollectedSoFar.toLocaleString('en-IN')} paid so far. <strong>₹{remainingAdvanceToCollect.toLocaleString('en-IN')} is NOT PAID</strong> yet.
+                      </p>
+                    </div>
+                  </div>
+                  <span className="px-2.5 py-1 bg-amber-500 text-white text-[11px] font-bold rounded-lg shrink-0">
+                    Partial
+                  </span>
+                </div>
+              ) : (
+                <div className="p-3 bg-rose-50 border border-rose-300 rounded-xl flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+                    <div>
+                      <p className="text-xs font-black text-rose-950">
+                        Advance Status: NOT PAID YET
+                      </p>
+                      <p className="text-[11px] text-rose-800">
+                        Zero advance paid so far. Full amount <strong>₹{targetAdvanceTotal.toLocaleString('en-IN')}</strong> is unpaid.
+                      </p>
+                    </div>
+                  </div>
+                  <span className="px-2.5 py-1 bg-rose-600 text-white text-[11px] font-bold rounded-lg shrink-0">
+                    Unpaid
+                  </span>
+                </div>
+              )}
+
               {/* Metrics Grid */}
               <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                <div className="p-2 bg-white rounded-lg border border-amber-200">
+                <div className="p-2 bg-white rounded-lg border border-purple-200">
                   <span className="text-[10px] font-bold text-slate-500 uppercase block">Agreed Target</span>
                   <span className="font-extrabold text-slate-900 block mt-0.5">₹{targetAdvanceTotal.toLocaleString('en-IN')}</span>
                 </div>
-                <div className="p-2 bg-white rounded-lg border border-amber-200">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase block">Already Paid</span>
+                <div className="p-2 bg-white rounded-lg border border-purple-200">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase block">Paid So Far</span>
                   <span className="font-extrabold text-emerald-700 block mt-0.5">₹{totalAdvanceCollectedSoFar.toLocaleString('en-IN')}</span>
-                  <span className="text-[9px] text-slate-400 block font-medium mt-0.5">({pastAdvancePayments.length} slice{pastAdvancePayments.length !== 1 ? 's' : ''})</span>
+                  <span className="text-[9px] text-slate-400 block font-medium mt-0.5">({pastAdvancePayments.length} piece{pastAdvancePayments.length !== 1 ? 's' : ''})</span>
                 </div>
-                <div className="p-2 bg-white rounded-lg border border-amber-200">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase block">Remaining Balance</span>
-                  <span className="font-extrabold text-rose-700 block mt-0.5">₹{remainingAdvanceToCollect.toLocaleString('en-IN')}</span>
+                <div className="p-2 bg-white rounded-lg border border-purple-200">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase block">Remaining Unpaid</span>
+                  <span className={`font-extrabold block mt-0.5 ${remainingAdvanceToCollect > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                    {remainingAdvanceToCollect > 0 ? `₹${remainingAdvanceToCollect.toLocaleString('en-IN')}` : '₹0 (Done ✓)'}
+                  </span>
                 </div>
               </div>
 
+              {/* When and how much: itemized pieces breakdown across different dates */}
+              {pastAdvancePayments.length > 0 && (
+                <div className="bg-white rounded-xl border border-purple-200 p-2.5 space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-bold text-slate-800 border-b border-slate-100 pb-1">
+                    <span className="flex items-center gap-1 text-purple-900">
+                      <Layers className="w-3.5 h-3.5" />
+                      Pieces Paid Across Different Dates ({pastAdvancePayments.length}):
+                    </span>
+                    <span className="text-emerald-700 font-extrabold">₹{totalAdvanceCollectedSoFar.toLocaleString('en-IN')}</span>
+                  </div>
+                  <div className="divide-y divide-slate-100 max-h-32 overflow-y-auto">
+                    {pastAdvancePayments
+                      .sort((a, b) => new Date(a.payment_date || '').getTime() - new Date(b.payment_date || '').getTime())
+                      .map((piece, i) => (
+                        <div key={piece.id || i} className="py-1.5 flex items-center justify-between text-xs">
+                          <div>
+                            <span className="font-bold text-slate-900">
+                              Piece #{piece.installment_number || i + 1}: ₹{Number(piece.amount_paid).toLocaleString('en-IN')}
+                            </span>
+                            <span className="text-[10px] text-slate-500 ml-1.5">
+                              on {piece.payment_date ? new Date(piece.payment_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'N/A'} via {piece.payment_method || 'UPI'}
+                            </span>
+                            {piece.notes && (
+                              <span className="text-[10px] text-slate-400 block truncate max-w-[280px]">
+                                {piece.notes}
+                              </span>
+                            )}
+                          </div>
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 shrink-0">
+                            Paid ✓
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+
               {/* Progress Bar */}
               <div className="space-y-1">
-                <div className="w-full bg-amber-200/80 rounded-full h-2.5 overflow-hidden flex">
+                <div className="w-full bg-purple-100 rounded-full h-2.5 overflow-hidden flex">
                   <div 
                     className="bg-emerald-600 h-full transition-all duration-300"
                     style={{ width: `${Math.min(100, Math.round((totalAdvanceCollectedSoFar / (targetAdvanceTotal || 1)) * 100))}%` }}
                   />
                   {paidNum > 0 && (
                     <div 
-                      className="bg-amber-500 h-full transition-all duration-300 opacity-90"
+                      className="bg-purple-600 h-full transition-all duration-300 opacity-90"
                       style={{ width: `${Math.min(100 - Math.min(100, Math.round((totalAdvanceCollectedSoFar / (targetAdvanceTotal || 1)) * 100)), Math.round((paidNum / (targetAdvanceTotal || 1)) * 100))}%` }}
                     />
                   )}
                 </div>
-                <div className="flex justify-between text-[11px] font-bold text-amber-950">
+                <div className="flex justify-between text-[11px] font-bold text-purple-950">
                   <span>
-                    {Math.round(((totalAdvanceCollectedSoFar + paidNum) / (targetAdvanceTotal || 1)) * 100)}% Total Collected
+                    {Math.round(((totalAdvanceCollectedSoFar + paidNum) / (targetAdvanceTotal || 1)) * 100)}% Total Advance Paid
                   </span>
                   <span>
                     {Math.max(0, targetAdvanceTotal - totalAdvanceCollectedSoFar - paidNum) === 0 ? (
-                      <span className="text-emerald-700">🎉 Advance fully paid after this slice!</span>
+                      <span className="text-emerald-700 font-black">🎉 Advance count fully settled (Done ✓)!</span>
                     ) : (
-                      <span className="text-amber-800">₹{Math.max(0, targetAdvanceTotal - totalAdvanceCollectedSoFar - paidNum).toLocaleString('en-IN')} will remain pending</span>
+                      <span className="text-purple-900 font-medium">₹{Math.max(0, targetAdvanceTotal - totalAdvanceCollectedSoFar - paidNum).toLocaleString('en-IN')} will remain unpaid</span>
                     )}
                   </span>
                 </div>
               </div>
 
-              {/* Quick Slices Buttons */}
-              <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-amber-200/60">
-                <span className="text-[11px] font-bold text-amber-900">Choose Slice:</span>
-                {generateSlicePresets(remainingAdvanceToCollect, targetAdvanceTotal).map((sliceAmt) => (
-                  <button
-                    key={sliceAmt}
-                    type="button"
-                    onClick={() => handleApplySlice(sliceAmt, 'SECURITY_DEPOSIT', targetAdvanceTotal, totalAdvanceCollectedSoFar, nextAdvanceSliceIndex)}
-                    className={`px-2.5 py-1 text-xs font-bold rounded-lg border transition-all cursor-pointer ${
-                      paidNum === sliceAmt
-                        ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
-                        : 'bg-white text-amber-950 border-amber-300 hover:bg-amber-100'
-                    }`}
-                  >
-                    {sliceAmt === remainingAdvanceToCollect ? `⚡ Full Remaining (₹${sliceAmt.toLocaleString('en-IN')})` : `+ ₹${sliceAmt.toLocaleString('en-IN')}`}
-                  </button>
-                ))}
-              </div>
+              {/* Quick Slices Buttons (when balance remains) */}
+              {remainingAdvanceToCollect > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-purple-200/60">
+                  <span className="text-[11px] font-bold text-purple-900">Choose Piece Amount:</span>
+                  {generateSlicePresets(remainingAdvanceToCollect, targetAdvanceTotal).map((sliceAmt) => (
+                    <button
+                      key={sliceAmt}
+                      type="button"
+                      onClick={() => handleApplySlice(sliceAmt, 'SECURITY_DEPOSIT', targetAdvanceTotal, totalAdvanceCollectedSoFar, nextAdvanceSliceIndex)}
+                      className={`px-2.5 py-1 text-xs font-bold rounded-lg border transition-all cursor-pointer ${
+                        paidNum === sliceAmt
+                          ? 'bg-purple-700 text-white border-purple-700 shadow-xs'
+                          : 'bg-white text-purple-950 border-purple-300 hover:bg-purple-100'
+                      }`}
+                    >
+                      {sliceAmt === remainingAdvanceToCollect ? `⚡ Full Remaining (₹${sliceAmt.toLocaleString('en-IN')})` : `+ ₹${sliceAmt.toLocaleString('en-IN')}`}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

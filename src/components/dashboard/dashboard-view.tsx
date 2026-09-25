@@ -5,15 +5,17 @@ import Link from 'next/link';
 import { 
   Building2, IndianRupee, CalendarClock, ArrowUpRight, Plus, 
   ShieldCheck, CheckCircle2, Edit3, FileText, AlertTriangle, 
-  Phone, MessageSquare, Clock, Users, ArrowRight, Wallet, Check
+  Phone, MessageSquare, Clock, Users, ArrowRight, Wallet, Check, AlertCircle
 } from 'lucide-react';
 import { Room, Payment, Tenant } from '@/types/database';
 import { DEFAULT_ROOMS } from '@/lib/constants/rooms';
 import { 
   getLocalRooms, getLocalTenants, getLocalPayments, 
-  mergeTenants, mergeRooms, getLandlordProfile 
+  mergeTenants, mergeRooms, getLandlordProfile,
+  getTenantAdvanceSummary, AdvanceTrackingSummary
 } from '@/lib/store/app-store';
 import RecordPaymentModal from '@/components/payments/record-payment-modal';
+import AdvanceDepositModal from '@/components/tenants/advance-deposit-modal';
 
 interface DashboardProps {
   rooms: Room[];
@@ -85,8 +87,14 @@ export default function DashboardView({
 
   const [editingPayment, setEditingPayment] = useState<Payment | null>(null);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
-  const [dashboardViewMode, setDashboardViewMode] = useState<'UNPAID_RENT' | 'ALL_TRANSACTIONS'>('UNPAID_RENT');
+  const [dashboardViewMode, setDashboardViewMode] = useState<'UNPAID_RENT' | 'ALL_TRANSACTIONS' | 'ADVANCE_DEPOSITS'>('UNPAID_RENT');
   const [unpaidFilter, setUnpaidFilter] = useState<'DUE_PLUS_2' | 'ALL_PENDING'>('DUE_PLUS_2');
+  const [selectedTenantForAdvance, setSelectedTenantForAdvance] = useState<{
+    tenant: Tenant;
+    room?: Room | null;
+    summary: AdvanceTrackingSummary;
+  } | null>(null);
+  const [isAdvanceModalOpen, setIsAdvanceModalOpen] = useState(false);
 
   // Live synchronization across all open pages & tabs
   useEffect(() => {
@@ -117,6 +125,9 @@ export default function DashboardView({
   const currentDay = now.getDate();
   const todayStart = new Date(currentYear, currentMonthIndex, currentDay);
 
+  const nextMonthDate = new Date(currentYear, currentMonthIndex + 1, 1);
+  const nextMonthFullName = nextMonthDate.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+
   const totalRoomsCount = rooms.length > 0 ? rooms.length : 6;
   const occupiedRoomsCount = rooms.filter((r) => r.status === 'OCCUPIED').length;
   const vacantRoomsCount = Math.max(0, totalRoomsCount - occupiedRoomsCount);
@@ -124,8 +135,20 @@ export default function DashboardView({
   const bachelorsCount = activeTenants.filter((t) => t.tenant_type === 'BACHELORS').length;
   const familiesCount = activeTenants.filter((t) => t.tenant_type === 'FAMILY').length;
 
-  // Unpaid Rent Calculation: Active tenants who have not completed rent payment for the current month
-  const unpaidTenantsThisMonth: UnpaidTenantRecord[] = activeTenants
+  // RULE: If a tenant came this month (or in future), their rent should be taken next month!
+  const newTenantsThisMonth = activeTenants.filter((t) => {
+    const moveInMonth = (t.move_in_date || '').slice(0, 7);
+    return Boolean(moveInMonth && moveInMonth >= currentYearMonth);
+  });
+
+  // Only tenants who joined BEFORE the current month owe rent for this month
+  const rentEligibleTenantsThisMonth = activeTenants.filter((t) => {
+    const moveInMonth = (t.move_in_date || '').slice(0, 7);
+    return !moveInMonth || moveInMonth < currentYearMonth;
+  });
+
+  // Unpaid Rent Calculation: Only rent-eligible active tenants
+  const unpaidTenantsThisMonth: UnpaidTenantRecord[] = rentEligibleTenantsThisMonth
     .map((t) => {
       const room = rooms.find((r) => r.id === t.room_id || r.room_number === t.room?.room_number) || t.room;
       const expectedRent = Number(t.monthly_rent || room?.base_rent || 0);
@@ -204,10 +227,10 @@ export default function DashboardView({
   // List of displayed tenants according to active filter
   const displayedUnpaidTenants = unpaidFilter === 'DUE_PLUS_2' ? unpaidTenantsPastDuePlus2 : unpaidTenantsThisMonth;
 
-  // Expected Total Rent
-  const totalRentExpected = (activeTenants.length > 0
-    ? activeTenants.reduce((acc, t) => acc + Number(t.monthly_rent || 0), 0)
-    : rooms.reduce((acc, r) => acc + (r.status === 'OCCUPIED' ? Number(r.base_rent) : 0), 0)) || initialStats.totalRentExpected;
+  // Expected Total Rent: Only tenants eligible for rent this month are expected
+  const totalRentExpected = (rentEligibleTenantsThisMonth.length > 0
+    ? rentEligibleTenantsThisMonth.reduce((acc, t) => acc + Number(t.monthly_rent || 0), 0)
+    : (activeTenants.length > 0 ? 0 : rooms.reduce((acc, r) => acc + (r.status === 'OCCUPIED' ? Number(r.base_rent) : 0), 0))) || initialStats.totalRentExpected;
 
   // Rent collected specifically for current month
   const totalRentCollectedThisMonth = payments.filter((p) => {
@@ -236,6 +259,56 @@ export default function DashboardView({
     const diffDays = Math.ceil((end.getTime() - todayStart.getTime()) / (1000 * 60 * 60 * 24));
     return diffDays >= 0 && diffDays <= 45;
   });
+
+  // One-Time Advance Deposit Tracker for Active Tenants
+  const tenantAdvanceList = activeTenants.map((t) => {
+    const room = rooms.find((r) => r.id === t.room_id || r.room_number === t.room?.room_number) || t.room;
+    const summary = getTenantAdvanceSummary(t, room, payments);
+    return {
+      tenant: t,
+      room,
+      summary,
+    };
+  });
+
+  const totalAgreedAdvance = tenantAdvanceList.reduce((sum, item) => sum + item.summary.agreedAdvance, 0);
+  const totalCollectedAdvance = tenantAdvanceList.reduce((sum, item) => sum + item.summary.totalPaid, 0);
+  const totalPendingAdvance = tenantAdvanceList.reduce((sum, item) => sum + item.summary.remainingUnpaid, 0);
+  const fullyPaidAdvanceCount = tenantAdvanceList.filter((item) => item.summary.isFullyPaid).length;
+  const partialAdvanceCount = tenantAdvanceList.filter((item) => item.summary.status === 'PARTIALLY_PAID').length;
+  const unpaidAdvanceCount = tenantAdvanceList.filter((item) => item.summary.status === 'UNPAID').length;
+
+  const handleRecordAdvancePiece = (tenant: Tenant, remaining: number) => {
+    setIsAdvanceModalOpen(false);
+    const roomObj = rooms.find((r) => r.id === tenant.room_id) || tenant.room || undefined;
+    const now = new Date();
+    const currentMonthIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    const monthStr = now.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+    const agreedTotal = Number(tenant.security_deposit_paid || roomObj?.security_deposit || 20000);
+    const profile = getLandlordProfile();
+    const defaultReceiver = profile.name ? `${profile.name} (Owner)` : 'Landlord';
+    setEditingPayment({
+      id: `pay-advance-${Date.now()}`,
+      tenant_id: tenant.id,
+      room_id: tenant.room_id || '',
+      payment_type: 'SECURITY_DEPOSIT',
+      total_target_amount: agreedTotal,
+      billing_period_month: currentMonthIso,
+      billing_month: monthStr,
+      amount_due: remaining,
+      amount_paid: remaining,
+      amount_pending: 0,
+      payment_status: 'PAID',
+      payment_date: new Date().toISOString().split('T')[0],
+      payment_method: 'UPI',
+      received_by: defaultReceiver,
+      notes: `Advance Deposit Collection for ${tenant.full_name}`,
+      created_at: new Date().toISOString(),
+      tenant,
+      room: roomObj,
+    });
+    setIsPaymentModalOpen(true);
+  };
 
   const handleSendWhatsAppReminder = (u: UnpaidTenantRecord) => {
     const profile = getLandlordProfile();
@@ -508,6 +581,30 @@ export default function DashboardView({
               >
                 Recent Logs
               </button>
+              <button
+                type="button"
+                onClick={() => setDashboardViewMode('ADVANCE_DEPOSITS')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  dashboardViewMode === 'ADVANCE_DEPOSITS'
+                    ? 'bg-purple-700 text-white shadow-xs'
+                    : 'text-purple-700 hover:text-purple-900 hover:bg-purple-50'
+                }`}
+              >
+                <span>🔐 Advance Tracker</span>
+                {totalPendingAdvance > 0 ? (
+                  <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black ${
+                    dashboardViewMode === 'ADVANCE_DEPOSITS' ? 'bg-purple-900 text-purple-100' : 'bg-purple-100 text-purple-800'
+                  }`}>
+                    ₹{totalPendingAdvance.toLocaleString('en-IN')} pending
+                  </span>
+                ) : (
+                  <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black ${
+                    dashboardViewMode === 'ADVANCE_DEPOSITS' ? 'bg-purple-900 text-emerald-200' : 'bg-emerald-100 text-emerald-800'
+                  }`}>
+                    Done ✓
+                  </span>
+                )}
+              </button>
             </div>
 
             <Link 
@@ -521,7 +618,23 @@ export default function DashboardView({
 
         {/* TAB 1: UNPAID RENT DUES */}
         {dashboardViewMode === 'UNPAID_RENT' && (
-          <div className="overflow-x-auto">
+          <div>
+            {newTenantsThisMonth.length > 0 && (
+              <div className="mx-4 mt-3 mb-2 p-3 bg-blue-50/80 border border-blue-200/90 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded-md bg-blue-100 text-blue-800 font-bold shrink-0 text-[10px]">
+                    ✨ Move-In Policy
+                  </span>
+                  <span className="text-slate-700 font-medium">
+                    <strong>{newTenantsThisMonth.length} new tenant{newTenantsThisMonth.length > 1 ? 's' : ''}</strong> ({newTenantsThisMonth.map((t) => t.full_name).join(', ')}) joined this month. Per policy, their first monthly rent will be collected next month ({nextMonthFullName}).
+                  </span>
+                </div>
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-blue-800 bg-blue-100 border border-blue-300 px-2.5 py-1 rounded-lg shrink-0">
+                  🗓️ 1st Rent Due Next Month
+                </span>
+              </div>
+            )}
+            <div className="overflow-x-auto">
             {displayedUnpaidTenants.length === 0 ? (
               <div className="text-center py-12 px-4 bg-emerald-50/40">
                 <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-3">
@@ -685,7 +798,8 @@ export default function DashboardView({
               </table>
             )}
           </div>
-        )}
+        </div>
+      )}
 
         {/* TAB 2: RECENT TRANSACTIONS */}
         {dashboardViewMode === 'ALL_TRANSACTIONS' && (
@@ -782,6 +896,183 @@ export default function DashboardView({
                 )}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* TAB 3: ADVANCE DEPOSITS TRACKER (ONE-TIME PAYMENT) */}
+        {dashboardViewMode === 'ADVANCE_DEPOSITS' && (
+          <div>
+            {/* Advance Overview Banner */}
+            <div className="p-4 bg-purple-50/70 border-b border-purple-100 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded-md bg-purple-200 text-purple-900 font-bold text-[10px]">
+                    🔐 One-Time Payment Policy
+                  </span>
+                  <span className="font-bold text-slate-800">
+                    Advance is collected once at move-in and is completely distinct from monthly rent.
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-600 mt-1">
+                  Tenants can pay the agreed advance in small pieces across different dates. Once the total agreed amount is paid, the advance is marked <strong>Done ✓</strong>.
+                </p>
+              </div>
+
+              {/* Quick stats pills */}
+              <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                <span className="px-2.5 py-1 rounded-lg bg-white border border-purple-200 font-bold text-purple-900">
+                  Total Agreed: ₹{totalAgreedAdvance.toLocaleString('en-IN')}
+                </span>
+                <span className="px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 font-bold text-emerald-800">
+                  Collected: ₹{totalCollectedAdvance.toLocaleString('en-IN')}
+                </span>
+                {totalPendingAdvance > 0 ? (
+                  <span className="px-2.5 py-1 rounded-lg bg-rose-50 border border-rose-200 font-bold text-rose-700">
+                    Unpaid: ₹{totalPendingAdvance.toLocaleString('en-IN')}
+                  </span>
+                ) : (
+                  <span className="px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-900 font-black">
+                    All Done ✓
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Advance Table */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-100/80 text-slate-700 font-bold border-b border-slate-200">
+                  <tr>
+                    <th className="py-3 px-4">Tenant / Room</th>
+                    <th className="py-3 px-4">Agreed Advance</th>
+                    <th className="py-3 px-4">Paid So Far</th>
+                    <th className="py-3 px-4">Unpaid Balance</th>
+                    <th className="py-3 px-4">Payment Pieces & Dates</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {tenantAdvanceList.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="text-center py-10 text-slate-500 font-semibold">
+                        No active tenants found. Add a tenant to track their advance deposit.
+                      </td>
+                    </tr>
+                  ) : (
+                    tenantAdvanceList.map(({ tenant, room, summary }) => (
+                      <tr key={tenant.id} className="hover:bg-purple-50/30 transition-colors">
+                        {/* Tenant / Room */}
+                        <td className="py-3.5 px-4">
+                          <span className="font-bold text-slate-900 block">{tenant.full_name}</span>
+                          <span className="text-[11px] text-slate-500 block">
+                            {room?.room_number ? `Room ${room.room_number}` : 'Room'} • Move-in: {tenant.move_in_date || 'N/A'}
+                          </span>
+                        </td>
+
+                        {/* Agreed Advance */}
+                        <td className="py-3.5 px-4 font-black text-slate-900">
+                          ₹{summary.agreedAdvance.toLocaleString('en-IN')}
+                        </td>
+
+                        {/* Paid So Far */}
+                        <td className="py-3.5 px-4">
+                          <span className="font-bold text-emerald-700 block">
+                            ₹{summary.totalPaid.toLocaleString('en-IN')}
+                          </span>
+                          <span className="text-[10px] text-slate-500 font-medium block">
+                            {summary.piecesCount === 0
+                              ? '0 pieces paid'
+                              : `${summary.piecesCount} piece${summary.piecesCount > 1 ? 's' : ''}`}
+                          </span>
+                        </td>
+
+                        {/* Unpaid Balance */}
+                        <td className="py-3.5 px-4">
+                          {summary.remainingUnpaid > 0 ? (
+                            <div>
+                              <span className="font-black text-rose-600 block">
+                                ₹{summary.remainingUnpaid.toLocaleString('en-IN')}
+                              </span>
+                              <span className="text-[10px] text-rose-500 font-bold block">
+                                Not Paid Yet
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" /> ₹0 (Done)
+                            </span>
+                          )}
+                        </td>
+
+                        {/* Payment Pieces & Dates */}
+                        <td className="py-3.5 px-4 max-w-[280px]">
+                          {summary.pieces.length === 0 ? (
+                            <span className="text-slate-400 italic text-[11px]">No pieces recorded yet</span>
+                          ) : (
+                            <div className="flex flex-wrap gap-1.5">
+                              {summary.pieces.map((piece, idx) => (
+                                <span
+                                  key={idx}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-50 text-purple-900 border border-purple-200 rounded text-[10px] font-bold"
+                                  title={`Piece #${idx + 1}: ₹${piece.amount} via ${piece.payment_method || 'UPI'} on ${piece.payment_date || 'N/A'}${piece.notes ? ` (${piece.notes})` : ''}`}
+                                >
+                                  ₹{piece.amount.toLocaleString('en-IN')} • {piece.payment_date ? new Date(piece.payment_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : 'Date N/A'}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </td>
+
+                        {/* Status Badge */}
+                        <td className="py-3.5 px-4">
+                          {summary.isFullyPaid ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                              <CheckCircle2 className="w-3 h-3" /> Done ✓
+                            </span>
+                          ) : summary.status === 'PARTIALLY_PAID' ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                              <Clock className="w-3 h-3" /> Partial ({summary.piecesCount} piece{summary.piecesCount > 1 ? 's' : ''})
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800 border border-rose-300">
+                              <AlertCircle className="w-3 h-3" /> Unpaid
+                            </span>
+                          )}
+                        </td>
+
+                        {/* Actions */}
+                        <td className="py-3.5 px-4 text-right">
+                          <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedTenantForAdvance({ tenant, room, summary });
+                                setIsAdvanceModalOpen(true);
+                              }}
+                              className="px-2.5 py-1 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-lg text-[11px] font-bold transition-colors cursor-pointer"
+                              title="View all pieces, dates, and breakdown"
+                            >
+                              Pieces Details →
+                            </button>
+                            {!summary.isFullyPaid && (
+                              <button
+                                type="button"
+                                onClick={() => handleRecordAdvancePiece(tenant, summary.remainingUnpaid)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 bg-purple-700 hover:bg-purple-800 text-white rounded-lg text-[11px] font-bold shadow-xs transition-colors cursor-pointer"
+                                title={`Collect next piece for ${tenant.full_name}`}
+                              >
+                                <Plus className="w-3 h-3" /> Collect Piece
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </div>
@@ -949,6 +1240,18 @@ export default function DashboardView({
               return [saved, ...prev];
             });
           }}
+        />
+      )}
+
+      {/* Advance Deposit Pieces & Details Modal */}
+      {isAdvanceModalOpen && selectedTenantForAdvance && (
+        <AdvanceDepositModal
+          isOpen={isAdvanceModalOpen}
+          tenant={selectedTenantForAdvance.tenant}
+          room={selectedTenantForAdvance.room}
+          summary={selectedTenantForAdvance.summary}
+          onClose={() => setIsAdvanceModalOpen(false)}
+          onRecordAdvancePiece={(tenant: Tenant, remaining: number) => handleRecordAdvancePiece(tenant, remaining)}
         />
       )}
     </div>
