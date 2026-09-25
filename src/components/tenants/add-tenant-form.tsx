@@ -283,9 +283,9 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
           emergency_contact_relation: formData.emergencyRelation,
           move_in_date: formData.moveInDate,
           lease_end_date: formData.leaseEndDate,
-          monthly_rent: Number(formData.monthlyRent),
+          monthly_rent: Math.max(0, Number(formData.monthlyRent) || 0),
           security_deposit_paid: advancePaidTodayNum,
-          rent_due_day: Number(formData.rentDueDay || 5),
+          rent_due_day: Math.max(1, Math.min(31, Number(formData.rentDueDay || 5))),
           status: 'ACTIVE',
           room: selectedRoom,
           created_at: new Date().toISOString(),
@@ -616,6 +616,15 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
                   )}
                   <span className="block text-slate-600 mt-0.5 font-medium">
                     Max Capacity: {currentSelectedRoom.capacity || 2} Members • Members Staying: {currentSelectedRoom.current_occupancy || 0} Members
+                  </span>
+                </div>
+              )}
+
+              {currentSelectedRoom && (tenantType === 'BACHELORS' ? occupants.length : Number(formData.familyMembersCount || 1)) > (currentSelectedRoom.capacity || 2) && (
+                <div className="mt-2 p-2.5 bg-amber-50 border border-amber-300 rounded-lg text-[11px] text-amber-900 font-semibold flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>
+                    <strong>Capacity Notice:</strong> {tenantType === 'BACHELORS' ? occupants.length : Number(formData.familyMembersCount || 1)} occupants exceeds this room&apos;s registered capacity ({currentSelectedRoom.capacity || 2}). The room will be marked 100% full upon booking.
                   </span>
                 </div>
               )}

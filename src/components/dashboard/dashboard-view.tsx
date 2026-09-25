@@ -3,14 +3,16 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { 
-  Building2, IndianRupee, 
-  CalendarClock, ArrowUpRight, Plus, ShieldCheck, CheckCircle2,
-  GraduationCap, Edit3, Sparkles, FileText
+  Building2, IndianRupee, CalendarClock, ArrowUpRight, Plus, 
+  ShieldCheck, CheckCircle2, Edit3, FileText, AlertTriangle, 
+  Phone, MessageSquare, Clock, Users, ArrowRight, Wallet, Check
 } from 'lucide-react';
-import { Room, Payment, Tenant, PaymentType } from '@/types/database';
+import { Room, Payment, Tenant } from '@/types/database';
 import { DEFAULT_ROOMS } from '@/lib/constants/rooms';
-import { getLocalRooms, getLocalTenants, getLocalPayments, mergeTenants, mergeRooms } from '@/lib/store/app-store';
-import EditRoomModal from '@/components/rooms/edit-room-modal';
+import { 
+  getLocalRooms, getLocalTenants, getLocalPayments, 
+  mergeTenants, mergeRooms, getLandlordProfile 
+} from '@/lib/store/app-store';
 import RecordPaymentModal from '@/components/payments/record-payment-modal';
 
 interface DashboardProps {
@@ -26,6 +28,24 @@ interface DashboardProps {
     pendingDues: number;
     expiriesCount: number;
   };
+}
+
+export interface UnpaidTenantRecord {
+  tenant: Tenant;
+  room?: Room | null;
+  expectedRent: number;
+  rentPaidThisMonth: number;
+  pendingDue: number;
+  rentDueDay: number;
+  dueDate: Date;
+  graceLimitDate: Date;
+  isOverdue: boolean;
+  daysOverdue: number;
+  daysRemaining: number;
+  isPastDueDatePlus2: boolean;
+  daysOverGraceLimit: number;
+  status: 'NOT_PAID' | 'PARTIALLY_PAID';
+  lastSliceNote?: string | null;
 }
 
 export default function DashboardView({ 
@@ -63,13 +83,12 @@ export default function DashboardView({
     return [];
   });
 
-  const [editingRoom, setEditingRoom] = useState<Room | null>(null);
-  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-
   const [editingPayment, setEditingPayment] = useState<Payment | null>(null);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [dashboardViewMode, setDashboardViewMode] = useState<'UNPAID_RENT' | 'ALL_TRANSACTIONS'>('UNPAID_RENT');
+  const [unpaidFilter, setUnpaidFilter] = useState<'DUE_PLUS_2' | 'ALL_PENDING'>('DUE_PLUS_2');
 
-  // Live synchronization across all pages
+  // Live synchronization across all open pages & tabs
   useEffect(() => {
     const syncData = () => {
       const localT = getLocalTenants();
@@ -82,396 +101,616 @@ export default function DashboardView({
       setPayments(localP);
     };
 
-    // Ensure immediate sync on client mount
     syncData();
-
     window.addEventListener('rentvault_data_updated', syncData);
     return () => window.removeEventListener('rentvault_data_updated', syncData);
   }, [initialAllTenants, initialRooms]);
 
+  // Current month reference
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonthIndex = now.getMonth();
+  const currentYearMonth = `${currentYear}-${String(currentMonthIndex + 1).padStart(2, '0')}`;
+  const currentMonthFullName = now.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+  const currentMonthShort = now.toLocaleString('en-IN', { month: 'short' });
+  const currentMonthLongNameOnly = now.toLocaleString('en-IN', { month: 'long' });
+  const currentDay = now.getDate();
+  const todayStart = new Date(currentYear, currentMonthIndex, currentDay);
+
   const totalRoomsCount = rooms.length > 0 ? rooms.length : 6;
   const occupiedRoomsCount = rooms.filter((r) => r.status === 'OCCUPIED').length;
-  const vacantRoomsCount = rooms.filter((r) => r.status === 'VACANT' || r.can_someone_get_in).length;
+  const vacantRoomsCount = Math.max(0, totalRoomsCount - occupiedRoomsCount);
   const activeTenants = tenants.filter((t) => t.status !== 'MOVED_OUT');
   const bachelorsCount = activeTenants.filter((t) => t.tenant_type === 'BACHELORS').length;
   const familiesCount = activeTenants.filter((t) => t.tenant_type === 'FAMILY').length;
 
+  // Unpaid Rent Calculation: Active tenants who have not completed rent payment for the current month
+  const unpaidTenantsThisMonth: UnpaidTenantRecord[] = activeTenants
+    .map((t) => {
+      const room = rooms.find((r) => r.id === t.room_id || r.room_number === t.room?.room_number) || t.room;
+      const expectedRent = Number(t.monthly_rent || room?.base_rent || 0);
+
+      // Helper to accurately match rent payments for current month without cross-month leak
+      const isCurrentMonthPayment = (p: Payment) => {
+        const isRent = (p.payment_type || 'RENT') === 'RENT';
+        if (!isRent) return false;
+
+        const billingPeriod = (p.billing_period_month || '').slice(0, 7);
+        if (billingPeriod) {
+          return billingPeriod === currentYearMonth;
+        }
+
+        const billingName = (p.billing_month || '').toLowerCase();
+        if (billingName) {
+          const hasMonth = billingName.includes(currentMonthLongNameOnly.toLowerCase()) || billingName.includes(currentMonthShort.toLowerCase());
+          const hasYear = billingName.includes(String(currentYear));
+          if (hasMonth && hasYear) return true;
+        }
+
+        const payDateMonth = (p.payment_date || '').slice(0, 7);
+        return payDateMonth === currentYearMonth;
+      };
+
+      // Filter rent payments matching this tenant and current month
+      const tenantMonthRentPayments = payments
+        .filter((p) => p.tenant_id === t.id && isCurrentMonthPayment(p))
+        .sort((a, b) => new Date(b.payment_date || b.created_at || '').getTime() - new Date(a.payment_date || a.created_at || '').getTime());
+
+      const rentPaidThisMonth = tenantMonthRentPayments.reduce((sum, p) => sum + Number(p.amount_paid || 0), 0);
+      const pendingDue = Math.max(0, expectedRent - rentPaidThisMonth);
+      
+      // Calculate effective due date without month spillover (e.g. day 31 in a 30-day month)
+      const daysInCurrentMonth = new Date(currentYear, currentMonthIndex + 1, 0).getDate();
+      const rentDueDay = t.rent_due_day || 5;
+      const effectiveDueDay = Math.min(rentDueDay, daysInCurrentMonth);
+
+      const dueDate = new Date(currentYear, currentMonthIndex, effectiveDueDay);
+      const graceLimitDate = new Date(dueDate.getTime() + 2 * 24 * 60 * 60 * 1000);
+
+      const isOverdue = todayStart > dueDate;
+      const daysOverdue = isOverdue ? Math.max(1, Math.round((todayStart.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))) : 0;
+      const daysRemaining = !isOverdue ? Math.max(0, Math.round((dueDate.getTime() - todayStart.getTime()) / (1000 * 60 * 60 * 24))) : 0;
+
+      const isPastDueDatePlus2 = todayStart >= graceLimitDate;
+      const daysOverGraceLimit = isPastDueDatePlus2
+        ? Math.max(0, Math.round((todayStart.getTime() - graceLimitDate.getTime()) / (1000 * 60 * 60 * 24)))
+        : 0;
+      const latestPayment = tenantMonthRentPayments[0];
+
+      return {
+        tenant: t,
+        room,
+        expectedRent,
+        rentPaidThisMonth,
+        pendingDue,
+        rentDueDay,
+        dueDate,
+        graceLimitDate,
+        isOverdue,
+        daysOverdue,
+        daysRemaining,
+        isPastDueDatePlus2,
+        daysOverGraceLimit,
+        status: rentPaidThisMonth > 0 ? ('PARTIALLY_PAID' as const) : ('NOT_PAID' as const),
+        lastSliceNote: latestPayment?.notes,
+      };
+    })
+    .filter((record) => record.expectedRent > 0 && record.pendingDue > 0);
+
+  // Tenants past due date + 2 days
+  const unpaidTenantsPastDuePlus2 = unpaidTenantsThisMonth.filter((u) => u.isPastDueDatePlus2);
+  const totalPendingRentPast2Days = unpaidTenantsPastDuePlus2.reduce((sum, u) => sum + u.pendingDue, 0);
+
+  // List of displayed tenants according to active filter
+  const displayedUnpaidTenants = unpaidFilter === 'DUE_PLUS_2' ? unpaidTenantsPastDuePlus2 : unpaidTenantsThisMonth;
+
+  // Expected Total Rent
   const totalRentExpected = (activeTenants.length > 0
     ? activeTenants.reduce((acc, t) => acc + Number(t.monthly_rent || 0), 0)
     : rooms.reduce((acc, r) => acc + (r.status === 'OCCUPIED' ? Number(r.base_rent) : 0), 0)) || initialStats.totalRentExpected;
-  const totalRentCollected = payments.reduce((acc, p) => acc + Number(p.amount_paid || 0), 0) || initialStats.totalRentCollected;
-  const pendingDues = payments.length > 0 
-    ? payments.reduce((acc, p) => acc + Number(p.amount_pending || 0), 0) 
-    : Math.max(0, totalRentExpected - totalRentCollected);
 
-  const occupancyPercentage = totalRoomsCount > 0 
-    ? Math.round((occupiedRoomsCount / totalRoomsCount) * 100) 
-    : 0;
+  // Rent collected specifically for current month
+  const totalRentCollectedThisMonth = payments.filter((p) => {
+    const isRent = (p.payment_type || 'RENT') === 'RENT';
+    if (!isRent) return false;
+    const billingPeriod = (p.billing_period_month || '').slice(0, 7);
+    if (billingPeriod) return billingPeriod === currentYearMonth;
+    const billingName = (p.billing_month || '').toLowerCase();
+    if (billingName) {
+      const hasMonth = billingName.includes(currentMonthLongNameOnly.toLowerCase()) || billingName.includes(currentMonthShort.toLowerCase());
+      const hasYear = billingName.includes(String(currentYear));
+      if (hasMonth && hasYear) return true;
+    }
+    const payDateMonth = (p.payment_date || '').slice(0, 7);
+    return payDateMonth === currentYearMonth;
+  }).reduce((sum, p) => sum + Number(p.amount_paid || 0), 0);
 
-  const handleEditClick = (room: Room) => {
-    setEditingRoom(room);
-    setIsEditModalOpen(true);
+  // Rates for progress bars
+  const collectionRate = totalRentExpected > 0 ? Math.min(100, Math.round((totalRentCollectedThisMonth / totalRentExpected) * 100)) : 0;
+  const occupancyPercentage = totalRoomsCount > 0 ? Math.round((occupiedRoomsCount / totalRoomsCount) * 100) : 0;
+
+  // Expiring agreements within the next 45 days
+  const expiringSoonTenants = activeTenants.filter((t) => {
+    if (!t.lease_end_date) return false;
+    const end = new Date(t.lease_end_date);
+    const diffDays = Math.ceil((end.getTime() - todayStart.getTime()) / (1000 * 60 * 60 * 24));
+    return diffDays >= 0 && diffDays <= 45;
+  });
+
+  const handleSendWhatsAppReminder = (u: UnpaidTenantRecord) => {
+    const profile = getLandlordProfile();
+    const graceDateStr = u.graceLimitDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+    const text = `*RENT PAYMENT NOTICE - ${profile.propertyName || 'RentVault Property'}*\n\n` +
+      `Dear ${u.tenant.full_name},\n` +
+      `This is a payment notice regarding your rent for *${currentMonthFullName}* (Room ${u.room?.room_number || ''}).\n\n` +
+      `• Monthly Rent: ₹${u.expectedRent.toLocaleString('en-IN')}\n` +
+      (u.rentPaidThisMonth > 0 ? `• Already Paid (Slice): ₹${u.rentPaidThisMonth.toLocaleString('en-IN')}\n` : '') +
+      `• *Total Pending Due: ₹${u.pendingDue.toLocaleString('en-IN')}*\n` +
+      `• Rent Due Date: ${u.rentDueDay}th ${currentMonthShort}\n` +
+      (u.isPastDueDatePlus2 
+        ? `• Status: *🚨 2-Day Grace Period Expired on ${graceDateStr} (${u.daysOverGraceLimit}d overdue)*\n\n` 
+        : `• Status: Rent Pending\n\n`) +
+      (profile.upiId ? `Please clear the payment immediately via UPI to: *${profile.upiId}*\n\n` : '') +
+      `Kindly share the transaction receipt once paid. Thank you!`;
+
+    const encoded = encodeURIComponent(text);
+    const phone = u.tenant.phone ? u.tenant.phone.replace(/[^0-9]/g, '') : '';
+    const url = phone ? `https://wa.me/91${phone}?text=${encoded}` : `https://api.whatsapp.com/send?text=${encoded}`;
+    window.open(url, '_blank');
   };
 
-  const handleRoomSaved = (updated: Room) => {
-    setRooms((prev) =>
-      prev.map((r) => (r.id === updated.id || r.room_number === updated.room_number ? updated : r))
-    );
-  };
-
-  const getMoveInBadge = (room: Room) => {
-    if (room.status === 'MAINTENANCE') {
-      return (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-300">
-          <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
-          Maintenance
-        </span>
-      );
-    }
-
-    if (room.status === 'VACANT' || (room.current_occupancy || 0) === 0) {
-      return (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-300">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-          Empty / Ready to Move
-        </span>
-      );
-    }
-
-    if (room.can_someone_get_in) {
-      return (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-900 border border-indigo-300">
-          <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 animate-pulse"></span>
-          Space Open (Can Move In)
-        </span>
-      );
-    }
-
-    return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-800 border border-slate-300">
-        <span className="w-1.5 h-1.5 rounded-full bg-slate-500"></span>
-        Occupied (Full)
-      </span>
-    );
+  const handleQuickRecordRent = (u: UnpaidTenantRecord) => {
+    const profile = getLandlordProfile();
+    const defaultReceiver = profile.name ? `${profile.name} (Owner)` : 'Landlord';
+    setEditingPayment({
+      id: `pay-${Date.now()}`,
+      tenant_id: u.tenant.id,
+      room_id: u.room?.id || u.tenant.room_id || '',
+      payment_type: 'RENT',
+      total_target_amount: u.expectedRent,
+      billing_period_month: `${currentYearMonth}-01`,
+      billing_month: currentMonthFullName,
+      amount_due: u.pendingDue,
+      amount_paid: u.pendingDue,
+      amount_pending: 0,
+      payment_status: 'PAID',
+      payment_date: new Date().toISOString().split('T')[0],
+      payment_method: 'UPI',
+      received_by: defaultReceiver,
+      notes: u.rentPaidThisMonth > 0 
+        ? `Monthly Rent - Slice (Prev paid: ₹${u.rentPaidThisMonth.toLocaleString('en-IN')})` 
+        : 'Monthly Rent',
+      created_at: new Date().toISOString(),
+      tenant: u.tenant,
+      room: u.room || undefined,
+    });
+    setIsPaymentModalOpen(true);
   };
 
   return (
-    <div className="space-y-8 p-6 lg:p-8 max-w-7xl mx-auto">
+    <div className="space-y-7 p-6 lg:p-8 max-w-7xl mx-auto">
       {/* Top Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-300 pb-5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2">
         <div>
-          <div className="flex items-center gap-2.5">
-            <h1 className="text-2xl font-black text-slate-900 tracking-tight">Property Dashboard</h1>
-            <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
-              {rooms.length} Units {rooms.length > 0 ? `(${rooms.map((r) => r.room_number).join(', ')})` : ''}
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">Property Dashboard</h1>
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              {totalRoomsCount} Units Active
             </span>
           </div>
-          <p className="text-xs font-semibold text-slate-600 mt-1">
-            Real-time occupancy tracking, bachelors & family management, and move-in availability
+          <p className="text-xs sm:text-sm font-semibold text-slate-600 mt-1">
+            Real-time rent collection, overdue dues tracker, and tenant financial overview
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <Link
-            href="/tenants/new"
-            className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shadow-xs transition-all cursor-pointer"
+
+        {/* Quick Action CTAs */}
+        <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => {
+              setEditingPayment(null);
+              setIsPaymentModalOpen(true);
+            }}
+            className="inline-flex items-center gap-2 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs hover:shadow-md transition-all cursor-pointer"
           >
             <Plus className="w-4 h-4" />
-            Add New Tenant
+            Record Payment
+          </button>
+          <Link
+            href="/tenants/new"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-xs hover:shadow-md transition-all cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            Add Tenant
           </Link>
         </div>
       </div>
 
-      {/* 4 Metric Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-        {/* Occupancy Card */}
-        <div className="bg-white p-5 rounded-2xl border-2 border-slate-200 shadow-xs hover:border-slate-300 transition-all">
-          <div className="flex items-center justify-between text-slate-700">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-800">Occupancy Rate</span>
-            <div className="p-2 bg-blue-50 text-blue-700 rounded-lg">
-              <Building2 className="w-5 h-5" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <div className="text-2xl font-black text-slate-900">
-              {occupiedRoomsCount} / {totalRoomsCount}{' '}
-              <span className="text-xs font-bold text-slate-500">Rooms</span>
-            </div>
-            <div className="w-full bg-slate-200 rounded-full h-2 mt-3 overflow-hidden">
-              <div 
-                className="bg-blue-600 h-2 rounded-full transition-all duration-500" 
-                style={{ width: `${occupancyPercentage}%` }}
-              />
-            </div>
-            <p className="text-xs text-slate-700 mt-2 font-bold">
-              {vacantRoomsCount} room(s) have vacancy open
-            </p>
-          </div>
-        </div>
-
-        {/* Total Rent Expected & Collected */}
-        <div className="bg-white p-5 rounded-2xl border-2 border-slate-200 shadow-xs hover:border-slate-300 transition-all">
-          <div className="flex items-center justify-between text-slate-700">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-800">Expected Monthly Rent</span>
-            <div className="p-2 bg-emerald-50 text-emerald-700 rounded-lg">
+      {/* 4 KPI Metric Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
+        {/* Card 1: Expected Monthly Rent */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs hover:shadow-md transition-all group">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Expected This Month</span>
+            <div className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center group-hover:scale-105 transition-transform">
               <IndianRupee className="w-5 h-5" />
             </div>
           </div>
           <div className="mt-3">
-            <div className="text-2xl font-black text-slate-900">₹{totalRentExpected.toLocaleString('en-IN')}</div>
-            <p className="text-xs text-slate-600 mt-1 font-semibold">
-              Collected so far: <span className="font-bold text-emerald-700">₹{totalRentCollected.toLocaleString('en-IN')}</span>
-              {pendingDues > 0 ? (
-                <span className="text-rose-600 font-bold ml-1.5">• ₹{pendingDues.toLocaleString('en-IN')} pending</span>
-              ) : null}
+            <div className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
+              ₹{totalRentExpected.toLocaleString('en-IN')}
+            </div>
+            <p className="text-xs text-slate-500 mt-1 font-semibold flex items-center gap-1.5">
+              <span>{currentMonthFullName}</span>
+              <span>•</span>
+              <span>{activeTenants.length} Active Tenants</span>
             </p>
           </div>
         </div>
 
-        {/* Tenant Demographics: Bachelors vs Family */}
-        <div className="bg-white p-5 rounded-2xl border-2 border-slate-200 shadow-xs hover:border-slate-300 transition-all">
-          <div className="flex items-center justify-between text-slate-700">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-800">Tenant Types</span>
-            <div className="p-2 bg-purple-50 text-purple-700 rounded-lg">
-              <GraduationCap className="w-5 h-5" />
+        {/* Card 2: Collected This Month with Progress Bar */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs hover:shadow-md transition-all group">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider text-emerald-800">Collected This Month</span>
+            <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center group-hover:scale-105 transition-transform">
+              <CheckCircle2 className="w-5 h-5" />
             </div>
           </div>
           <div className="mt-3">
-            <div className="text-2xl font-black text-slate-900">
-              {bachelorsCount} <span className="text-xs font-bold text-purple-700">Bachelors</span> • {familiesCount} <span className="text-xs font-bold text-blue-700">Family</span>
+            <div className="text-2xl sm:text-3xl font-black text-emerald-600 tracking-tight">
+              ₹{totalRentCollectedThisMonth.toLocaleString('en-IN')}
             </div>
-            <p className="text-xs text-slate-600 mt-1 font-semibold">
-              Students, professionals & families
-            </p>
-          </div>
-        </div>
-
-        {/* Vacancy / Get-In Availability */}
-        <div className="bg-white p-5 rounded-2xl border-2 border-slate-200 shadow-xs hover:border-slate-300 transition-all">
-          <div className="flex items-center justify-between text-slate-700">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-800">Move-In Availability</span>
-            <div className="p-2 bg-amber-50 text-amber-700 rounded-lg">
-              <Sparkles className="w-5 h-5" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <div className="text-2xl font-black text-emerald-700">
-              {vacantRoomsCount > 0 ? `${vacantRoomsCount} Units Open` : 'Full House'}
-            </div>
-            <p className="text-xs text-slate-600 mt-1 font-semibold">
-              Chance for someone to move in
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* 6 Rooms Visual Status Grid: G1, 2A, 2B, 3A, 3B, P1 */}
-      <div id="rooms-section" className="bg-white p-6 rounded-2xl border-2 border-slate-200 shadow-sm">
-        <div className="flex items-center justify-between mb-5 border-b border-slate-200 pb-3">
-          <div>
-            <h2 className="text-lg font-black text-slate-900">Rental Units Grid (6 Rooms)</h2>
-            <p className="text-xs font-semibold text-slate-600 mt-0.5">
-              Live status, members staying, and chance for someone to get in
-            </p>
-          </div>
-          <Link
-            href="/rooms"
-            className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
-          >
-            Manage All Rooms →
-          </Link>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-          {rooms.map((room) => {
-            const roomTenants = tenants.filter(
-              (t) => (t.room_id === room.id || (t.room && t.room.room_number === room.room_number)) && t.status !== 'MOVED_OUT'
-            );
-            const primaryTenant = roomTenants[0];
-
-            // Count actual members staying in room (not by bed)
-            const membersStaying = roomTenants.reduce((sum, t) => {
-              if (t.tenant_type === 'BACHELORS') {
-                return sum + (t.occupants && t.occupants.length > 0 ? t.occupants.length : 1);
-              }
-              return sum + (t.family_members_count || 2);
-            }, 0);
-
-            const maxCapacity = room.capacity || 2;
-            const hasSpace = room.can_someone_get_in ?? (room.status === 'VACANT' || membersStaying < maxCapacity);
-
-            return (
+            <div className="w-full bg-slate-100 rounded-full h-2 mt-2.5 overflow-hidden">
               <div 
-                key={room.id}
-                className="p-4 rounded-xl border-2 border-slate-200 hover:border-indigo-400 transition-all bg-slate-50/70 flex flex-col justify-between min-h-[250px] group hover:shadow-sm"
-              >
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-base font-black text-slate-900">Room {room.room_number}</span>
-                    <span className="text-[11px] text-slate-600 font-bold bg-slate-200/80 px-1.5 py-0.5 rounded">
-                      {room.floor === 0 ? 'Ground' : room.floor === 4 ? 'Penthouse' : `Fl ${room.floor}`}
-                    </span>
-                  </div>
-                  
-                  <div className="mb-2">{getMoveInBadge(room)}</div>
+                className="bg-emerald-500 h-2 rounded-full transition-all duration-700" 
+                style={{ width: `${collectionRate}%` }}
+              />
+            </div>
+            <p className="text-xs text-slate-500 mt-1.5 font-bold">
+              {collectionRate}% collected of target
+            </p>
+          </div>
+        </div>
 
-                  <div className="space-y-1.5">
-                    <p className="text-xs font-black text-slate-900">
-                      {Number(room.base_rent) > 0 ? (
-                        <>
-                          ₹{Number(room.base_rent).toLocaleString('en-IN')}
-                          <span className="text-[11px] font-normal text-slate-500"> /mo</span>
-                        </>
-                      ) : (
-                        <span className="text-slate-500 text-[11px] italic font-medium">Rent not set (click Edit)</span>
-                      )}
-                    </p>
+        {/* Card 3: Overdue Past 2-Day Grace */}
+        <div className={`p-5 rounded-2xl border shadow-xs hover:shadow-md transition-all group ${
+          totalPendingRentPast2Days > 0 
+            ? 'bg-rose-50/40 border-rose-200/90' 
+            : 'bg-white border-slate-200/80'
+        }`}>
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider text-rose-800">Overdue (Due + 2d)</span>
+            <div className={`w-9 h-9 rounded-xl flex items-center justify-center group-hover:scale-105 transition-transform ${
+              totalPendingRentPast2Days > 0 ? 'bg-rose-100 text-rose-600' : 'bg-slate-100 text-slate-500'
+            }`}>
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="mt-3">
+            <div className={`text-2xl sm:text-3xl font-black tracking-tight ${
+              totalPendingRentPast2Days > 0 ? 'text-rose-600' : 'text-slate-900'
+            }`}>
+              ₹{totalPendingRentPast2Days.toLocaleString('en-IN')}
+            </div>
+            <p className="text-xs mt-1 font-semibold">
+              {unpaidTenantsPastDuePlus2.length > 0 ? (
+                <span className="text-rose-700 font-bold inline-flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-pulse"></span>
+                  {unpaidTenantsPastDuePlus2.length} tenant(s) past 2-day grace
+                </span>
+              ) : (
+                <span className="text-emerald-700 font-bold inline-flex items-center gap-1">
+                  <Check className="w-3.5 h-3.5" /> Zero overdue past grace
+                </span>
+              )}
+            </p>
+          </div>
+        </div>
 
-                    <div className="p-2 rounded-lg bg-white border border-slate-200 text-xs space-y-0.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-600 font-medium text-[11px]">Members Staying:</span>
-                        <span className="font-bold text-slate-900">
-                          {membersStaying > 0 ? `${membersStaying} Member${membersStaying > 1 ? 's' : ''}` : '0 (Empty)'}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between text-[10px] text-slate-500">
-                        <span>Max Capacity:</span>
-                        <span className="font-semibold text-slate-700">{maxCapacity} Members</span>
-                      </div>
-                    </div>
-
-                    {roomTenants.length > 0 ? (
-                      <div className="mt-1.5 pt-1.5 border-t border-slate-200">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">Occupants:</span>
-                        <p className="text-xs font-bold text-indigo-950 truncate" title={roomTenants.map((t) => t.full_name).join(', ')}>
-                          {roomTenants.map((t) => t.full_name).join(', ')}
-                        </p>
-                        <span className="text-[10px] font-semibold text-purple-700 block">
-                          {primaryTenant?.tenant_type === 'BACHELORS' ? 'Bachelors Group' : `Family of ${membersStaying}`}
-                        </span>
-                      </div>
-                    ) : room.notes ? (
-                      <p className="text-[10px] text-slate-600 line-clamp-2 mt-1 leading-snug">
-                        {room.notes}
-                      </p>
-                    ) : null}
-                  </div>
-                </div>
-
-                <div className="pt-2.5 border-t border-slate-200 space-y-1.5">
-                  <div className="flex items-center justify-between gap-1">
-                    <button
-                      type="button"
-                      onClick={() => handleEditClick(room)}
-                      className="text-[11px] font-bold text-slate-700 hover:text-indigo-600 flex items-center gap-0.5 cursor-pointer"
-                    >
-                      <Edit3 className="w-3 h-3" /> Edit
-                    </button>
-
-                    {hasSpace ? (
-                      <Link
-                        href={`/tenants/new?room_id=${room.id}`}
-                        className="text-[11px] font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-100 hover:bg-indigo-200 px-2 py-0.5 rounded transition-colors"
-                      >
-                        + Assign
-                      </Link>
-                    ) : (
-                      <div className="flex items-center gap-1">
-                        {primaryTenant ? (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const now = new Date();
-                              const currentMonthIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-                              const monthStr = now.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
-                              setEditingPayment({
-                                id: `pay-${Date.now()}`,
-                                tenant_id: primaryTenant.id,
-                                room_id: room.id,
-                                payment_type: 'RENT',
-                                billing_period_month: currentMonthIso,
-                                billing_month: monthStr,
-                                amount_due: Number(primaryTenant.monthly_rent || room.base_rent),
-                                amount_paid: Number(primaryTenant.monthly_rent || room.base_rent),
-                                amount_pending: 0,
-                                payment_status: 'PAID',
-                                payment_date: new Date().toISOString().split('T')[0],
-                                payment_method: 'UPI',
-                                received_by: 'LANDLORD',
-                                created_at: new Date().toISOString(),
-                                tenant: primaryTenant,
-                                room: room,
-                              });
-                              setIsPaymentModalOpen(true);
-                            }}
-                            className="text-[10px] font-bold text-emerald-700 hover:text-emerald-900 bg-emerald-100 hover:bg-emerald-200 px-1.5 py-0.5 rounded transition-colors cursor-pointer"
-                            title="Record rent payment for this unit"
-                          >
-                            + Pay
-                          </button>
-                        ) : null}
-                        <Link
-                          href="/tenants"
-                          className="text-[11px] font-bold text-slate-600 hover:text-slate-900"
-                        >
-                          Details →
-                        </Link>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+        {/* Card 4: Occupancy Rate */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs hover:shadow-md transition-all group">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Occupancy</span>
+            <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center group-hover:scale-105 transition-transform">
+              <Building2 className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="mt-3">
+            <div className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
+              {occupiedRoomsCount} / {totalRoomsCount}{' '}
+              <span className="text-sm font-bold text-slate-500">Units</span>
+            </div>
+            <div className="w-full bg-slate-100 rounded-full h-2 mt-2.5 overflow-hidden">
+              <div 
+                className="bg-blue-600 h-2 rounded-full transition-all duration-700" 
+                style={{ width: `${occupancyPercentage}%` }}
+              />
+            </div>
+            <p className="text-xs text-slate-500 mt-1.5 font-bold">
+              {occupancyPercentage}% occupied • {vacantRoomsCount} vacant
+            </p>
+          </div>
         </div>
       </div>
 
-      {/* Bottom Grid: Recent Payments & Lease Expiry Alerts */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Payment Ledger (2 Columns) */}
-        <div id="payments-section" className="lg:col-span-2 bg-white p-6 rounded-2xl border-2 border-slate-200 shadow-sm">
-          <div className="flex items-center justify-between mb-4 border-b border-slate-200 pb-3">
-            <div>
-              <h2 className="text-base font-black text-slate-900">Rent Payments & Collections</h2>
-              <p className="text-xs font-semibold text-slate-600">UPI & Cash rent ledger</p>
+      {/* Main Section: Rent Dues & Transactions Tracker */}
+      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden">
+        {/* Tracker Toolbar Header */}
+        <div className="p-5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-50/50">
+          <div>
+            <div className="flex items-center gap-2.5">
+              <h2 className="text-base sm:text-lg font-black text-slate-900 tracking-tight">
+                {dashboardViewMode === 'UNPAID_RENT' 
+                  ? (unpaidFilter === 'DUE_PLUS_2' 
+                      ? `Overdue Rent Dues (Due Date + 2 Days) — ${currentMonthFullName}` 
+                      : `All Pending Rent Dues — ${currentMonthFullName}`)
+                  : 'Recent Payment Transactions'}
+              </h2>
+              {unpaidTenantsPastDuePlus2.length > 0 ? (
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-100 text-rose-800 border border-rose-300">
+                  {unpaidTenantsPastDuePlus2.length} Overdue
+                </span>
+              ) : (
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                  All Clear
+                </span>
+              )}
             </div>
-            <div className="flex items-center gap-3">
+            <p className="text-xs font-semibold text-slate-500 mt-0.5">
+              {dashboardViewMode === 'UNPAID_RENT'
+                ? (unpaidFilter === 'DUE_PLUS_2'
+                    ? 'Tenants whose monthly rent due date and 2-day grace window have passed'
+                    : `Active tenants with pending rent balances for ${currentMonthFullName}`)
+                : 'Live log of recorded receipts and payments'}
+            </p>
+          </div>
+
+          {/* Filter Pills & Actions */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center bg-slate-200/70 p-1 rounded-xl">
               <button
                 type="button"
                 onClick={() => {
-                  setEditingPayment(null);
-                  setIsPaymentModalOpen(true);
+                  setDashboardViewMode('UNPAID_RENT');
+                  setUnpaidFilter('DUE_PLUS_2');
                 }}
-                className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors cursor-pointer"
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  dashboardViewMode === 'UNPAID_RENT' && unpaidFilter === 'DUE_PLUS_2'
+                    ? 'bg-rose-600 text-white shadow-xs'
+                    : 'text-slate-700 hover:text-slate-900'
+                }`}
               >
-                <Plus className="w-3.5 h-3.5" /> Record Payment
+                🚨 Overdue +2d ({unpaidTenantsPastDuePlus2.length})
               </button>
-              <Link href="/payments" className="text-xs font-bold text-indigo-600 hover:underline flex items-center gap-1">
-                Full Ledger <ArrowUpRight className="w-3.5 h-3.5" />
-              </Link>
+              <button
+                type="button"
+                onClick={() => {
+                  setDashboardViewMode('UNPAID_RENT');
+                  setUnpaidFilter('ALL_PENDING');
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  dashboardViewMode === 'UNPAID_RENT' && unpaidFilter === 'ALL_PENDING'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                All Pending ({unpaidTenantsThisMonth.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setDashboardViewMode('ALL_TRANSACTIONS')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  dashboardViewMode === 'ALL_TRANSACTIONS'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Recent Logs
+              </button>
             </div>
+
+            <Link 
+              href="/payments" 
+              className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 px-2.5 py-1.5 rounded-lg hover:bg-indigo-50 transition-colors"
+            >
+              Full Ledger <ArrowUpRight className="w-3.5 h-3.5" />
+            </Link>
           </div>
+        </div>
+
+        {/* TAB 1: UNPAID RENT DUES */}
+        {dashboardViewMode === 'UNPAID_RENT' && (
+          <div className="overflow-x-auto">
+            {displayedUnpaidTenants.length === 0 ? (
+              <div className="text-center py-12 px-4 bg-emerald-50/40">
+                <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-3">
+                  <CheckCircle2 className="w-7 h-7" />
+                </div>
+                <h3 className="text-base font-black text-slate-900">
+                  {unpaidFilter === 'DUE_PLUS_2'
+                    ? 'No Rent Dues Past Due Date + 2 Days! 🎉'
+                    : `All Rent Cleared for ${currentMonthFullName}! 🎉`}
+                </h3>
+                <p className="text-xs font-semibold text-slate-600 mt-1 max-w-md mx-auto">
+                  {unpaidFilter === 'DUE_PLUS_2'
+                    ? `All active tenants have either paid their rent or are currently within their 2-day payment grace window for ${currentMonthFullName}.`
+                    : 'Every active tenant has completed their rent payment for this month. There are zero pending dues.'}
+                </p>
+                {unpaidFilter === 'DUE_PLUS_2' && unpaidTenantsThisMonth.length > 0 && (
+                  <div className="mt-4">
+                    <button
+                      type="button"
+                      onClick={() => setUnpaidFilter('ALL_PENDING')}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800 transition-colors cursor-pointer"
+                    >
+                      Show {unpaidTenantsThisMonth.length} Tenant(s) within Grace Window / Upcoming
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-100/80 text-slate-700 font-bold border-b border-slate-200">
+                  <tr>
+                    <th className="py-3 px-4">Room & Tenant</th>
+                    <th className="py-3 px-4">Due Date & 2d Grace</th>
+                    <th className="py-3 px-4">Monthly Rent</th>
+                    <th className="py-3 px-4">Paid This Month</th>
+                    <th className="py-3 px-4">Pending Due</th>
+                    <th className="py-3 px-4 text-right">Quick Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {displayedUnpaidTenants.map((u) => (
+                    <tr key={u.tenant.id} className="hover:bg-slate-50/80 transition-colors">
+                      {/* Room & Tenant */}
+                      <td className="py-3.5 px-4">
+                        <span className="font-bold text-slate-900 block text-xs">
+                          {u.room?.room_number ? `Room ${u.room.room_number}` : 'Room Unit'}
+                        </span>
+                        <span className="text-[11px] text-slate-700 font-semibold block">
+                          {u.tenant.full_name}
+                        </span>
+                        <div className="flex items-center gap-1.5 text-[10px] text-slate-500 font-medium mt-0.5">
+                          <span>{u.tenant.tenant_type === 'BACHELORS' ? '🎓 Bachelors' : '👨‍👩‍👦 Family'}</span>
+                          <span>•</span>
+                          <span>{u.tenant.phone}</span>
+                        </div>
+                      </td>
+
+                      {/* Rent Due Date & Status */}
+                      <td className="py-3.5 px-4">
+                        {u.isPastDueDatePlus2 ? (
+                          <div>
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300">
+                              <AlertTriangle className="w-3 h-3 text-rose-600 shrink-0" />
+                              Grace Expired ({u.daysOverGraceLimit}d past +2d)
+                            </span>
+                            <span className="text-[10px] text-slate-500 block font-medium mt-0.5">
+                              Due was {u.rentDueDay}th • 2d grace ended {u.graceLimitDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                            </span>
+                          </div>
+                        ) : u.isOverdue ? (
+                          <div>
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                              <Clock className="w-3 h-3 text-amber-600 shrink-0" />
+                              Within 2d Grace ({u.rentDueDay}th)
+                            </span>
+                            <span className="text-[10px] text-slate-500 block font-medium mt-0.5">
+                              Grace ends {u.graceLimitDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                            </span>
+                          </div>
+                        ) : (
+                          <div>
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-300">
+                              <Clock className="w-3 h-3 text-slate-500 shrink-0" />
+                              Due in {u.daysRemaining} days
+                            </span>
+                            <span className="text-[10px] text-slate-500 block font-medium mt-0.5">
+                              Due date: {u.rentDueDay}th {currentMonthShort}
+                            </span>
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Monthly Rent */}
+                      <td className="py-3.5 px-4">
+                        <span className="font-bold text-slate-900 text-xs">
+                          ₹{u.expectedRent.toLocaleString('en-IN')}
+                        </span>
+                      </td>
+
+                      {/* Paid This Month */}
+                      <td className="py-3.5 px-4">
+                        {u.rentPaidThisMonth > 0 ? (
+                          <div>
+                            <span className="font-bold text-amber-700 text-xs block">
+                              ₹{u.rentPaidThisMonth.toLocaleString('en-IN')}
+                            </span>
+                            <span className="text-[10px] font-semibold text-amber-600 block">
+                              Partial Slice Paid
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400 font-semibold text-xs">
+                            ₹0
+                          </span>
+                        )}
+                      </td>
+
+                      {/* Pending Due */}
+                      <td className="py-3.5 px-4">
+                        <span className="font-black text-rose-600 text-xs block">
+                          ₹{u.pendingDue.toLocaleString('en-IN')}
+                        </span>
+                        <span className="text-[10px] text-rose-600 font-bold block">
+                          Pending
+                        </span>
+                      </td>
+
+                      {/* Quick Actions */}
+                      <td className="py-3.5 px-4 text-right">
+                        <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => handleQuickRecordRent(u)}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-bold shadow-xs transition-colors cursor-pointer"
+                            title={`Record rent payment for ${u.tenant.full_name}`}
+                          >
+                            <Plus className="w-3 h-3" /> Record Rent
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSendWhatsAppReminder(u)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-[11px] font-bold transition-colors cursor-pointer"
+                            title={`Send WhatsApp rent payment reminder to ${u.tenant.full_name}`}
+                          >
+                            <MessageSquare className="w-3 h-3 text-emerald-600" /> Reminder
+                          </button>
+                          {u.tenant.phone && (
+                            <a
+                              href={`tel:${u.tenant.phone}`}
+                              className="p-1.5 rounded-lg border border-slate-300 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                              title={`Call ${u.tenant.full_name} (${u.tenant.phone})`}
+                            >
+                              <Phone className="w-3.5 h-3.5" />
+                            </a>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+
+        {/* TAB 2: RECENT TRANSACTIONS */}
+        {dashboardViewMode === 'ALL_TRANSACTIONS' && (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
-              <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-300">
+              <thead className="bg-slate-100/80 text-slate-700 font-bold border-b border-slate-200">
                 <tr>
-                  <th className="py-2.5 px-3">Room / Tenant</th>
-                  <th className="py-2.5 px-3">Type</th>
-                  <th className="py-2.5 px-3">Month</th>
-                  <th className="py-2.5 px-3">Paid Amount</th>
-                  <th className="py-2.5 px-3">Method</th>
-                  <th className="py-2.5 px-3">Status</th>
-                  <th className="py-2.5 px-3 text-right">Actions</th>
+                  <th className="py-3 px-4">Room / Tenant</th>
+                  <th className="py-3 px-4">Type</th>
+                  <th className="py-3 px-4">Month</th>
+                  <th className="py-3 px-4">Paid Amount</th>
+                  <th className="py-3 px-4">Method</th>
+                  <th className="py-3 px-4">Status</th>
+                  <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-200">
+              <tbody className="divide-y divide-slate-100">
                 {payments.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="text-center py-8 text-slate-600 font-semibold">
+                    <td colSpan={7} className="text-center py-10 text-slate-500 font-semibold">
                       No payment records logged yet. Click &quot;Record Payment&quot; above to log an entry.
                     </td>
                   </tr>
                 ) : (
-                  payments.slice(0, 6).map((p) => {
+                  payments.slice(0, 8).map((p) => {
                     const pType = p.payment_type || 'RENT';
                     const badgeLabel = 
                       pType === 'MAINTENANCE' ? '🛠️ Maint' :
@@ -485,9 +724,9 @@ export default function DashboardView({
                       pType === 'OTHER' ? 'bg-slate-100 text-slate-800 border-slate-300' : 'bg-indigo-50 text-indigo-900 border-indigo-200';
 
                     return (
-                      <tr key={p.id} className="hover:bg-slate-50 transition-colors">
-                        <td className="py-3 px-3">
-                          <span className="font-bold text-slate-900 block">{p.room?.room_number || 'Room'}</span>
+                      <tr key={p.id} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="py-3.5 px-4">
+                          <span className="font-bold text-slate-900 block">{p.room?.room_number ? `Room ${p.room.room_number}` : 'Room'}</span>
                           <span className="text-[11px] text-slate-600 block">{p.tenant?.full_name || 'Tenant'}</span>
                           {p.notes && (
                             <div className="mt-0.5 flex items-center gap-1 text-[10px] font-medium text-slate-500 truncate max-w-[150px]" title={p.notes}>
@@ -496,15 +735,15 @@ export default function DashboardView({
                             </div>
                           )}
                         </td>
-                        <td className="py-3 px-3">
-                          <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold border ${badgeStyle}`}>
+                        <td className="py-3.5 px-4">
+                          <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold border ${badgeStyle}`}>
                             {badgeLabel}
                           </span>
                         </td>
-                        <td className="py-3 px-3 text-slate-700 font-medium">
+                        <td className="py-3.5 px-4 text-slate-700 font-medium">
                           {p.billing_month || 'Current'}
                         </td>
-                        <td className="py-3 px-3 font-bold text-emerald-700">
+                        <td className="py-3.5 px-4 font-bold text-emerald-700">
                           ₹{Number(p.amount_paid).toLocaleString('en-IN')}
                           {Number(p.amount_pending) > 0 ? (
                             <span className="text-[10px] text-rose-600 block font-normal">
@@ -512,10 +751,10 @@ export default function DashboardView({
                             </span>
                           ) : null}
                         </td>
-                        <td className="py-3 px-3 text-slate-800 font-semibold">
+                        <td className="py-3.5 px-4 text-slate-800 font-semibold">
                           {p.payment_method || 'UPI'}
                         </td>
-                        <td className="py-3 px-3">
+                        <td className="py-3.5 px-4">
                           <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
                             p.payment_status === 'PAID'
                               ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
@@ -524,14 +763,14 @@ export default function DashboardView({
                             {p.payment_status}
                           </span>
                         </td>
-                        <td className="py-3 px-3 text-right">
+                        <td className="py-3.5 px-4 text-right">
                           <button
                             type="button"
                             onClick={() => {
                               setEditingPayment(p);
                               setIsPaymentModalOpen(true);
                             }}
-                            className="p-1.5 rounded-md text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 transition-colors cursor-pointer"
+                            className="p-1.5 rounded-lg text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 transition-colors cursor-pointer"
                             title="Edit Payment"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
@@ -544,60 +783,149 @@ export default function DashboardView({
               </tbody>
             </table>
           </div>
-        </div>
+        )}
+      </div>
 
-        {/* Expiring Leases & Quick Vault */}
-        <div className="bg-white p-6 rounded-2xl border-2 border-slate-200 shadow-sm flex flex-col justify-between">
+      {/* Bottom 2 Refined Cards: Agreement Alerts & Quick Navigation */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* Card A: Lease Expiry & Agreement Alerts */}
+        <div className="bg-white p-6 rounded-2xl border border-slate-200/90 shadow-xs flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between mb-4 border-b border-slate-200 pb-3">
-              <h2 className="text-base font-black text-slate-900 flex items-center gap-2">
-                <CalendarClock className="w-5 h-5 text-amber-600" /> Lease Health
-              </h2>
-              <span className="text-xs font-bold text-slate-600">Active Agreements</span>
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-700 flex items-center justify-center">
+                  <CalendarClock className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900">Lease & Agreement Alerts</h3>
+                  <p className="text-[11px] text-slate-500 font-medium">Tracking upcoming 45-day renewal deadlines</p>
+                </div>
+              </div>
+              <Link href="/tenants" className="text-xs font-bold text-indigo-600 hover:text-indigo-800">
+                View All →
+              </Link>
             </div>
 
-            <div className="divide-y divide-slate-100">
-              <div className="text-center py-6">
+            {expiringSoonTenants.length > 0 ? (
+              <div className="divide-y divide-slate-100">
+                {expiringSoonTenants.slice(0, 4).map((t) => {
+                  const end = new Date(t.lease_end_date);
+                  const diffDays = Math.ceil((end.getTime() - todayStart.getTime()) / (1000 * 60 * 60 * 24));
+                  return (
+                    <div key={t.id} className="py-2.5 flex items-center justify-between">
+                      <div>
+                        <p className="text-xs font-bold text-slate-900">{t.full_name}</p>
+                        <p className="text-[11px] text-slate-500 font-medium">
+                          {t.room?.room_number ? `Room ${t.room.room_number}` : 'Unit'} • Ends {end.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                        </p>
+                      </div>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                        {diffDays === 0 ? 'Expires Today' : `${diffDays} days left`}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="py-6 text-center">
                 <CheckCircle2 className="w-8 h-8 text-emerald-600 mx-auto mb-2 opacity-90" />
                 <p className="text-xs font-bold text-slate-800">
-                  {tenants.length > 0 ? `${tenants.length} Tenant Leases Monitored` : 'Agreements in Good Standing'}
+                  {activeTenants.length > 0 ? `${activeTenants.length} Tenant Leases in Good Standing` : 'No Active Leases'}
                 </p>
-                <p className="text-[11px] text-slate-600 mt-1">
-                  All active tenant lease periods and stay durations are tracked in real-time.
+                <p className="text-[11px] text-slate-500 mt-1 max-w-sm mx-auto">
+                  Zero tenant agreements expiring in the next 45 days. All stay durations are healthy.
                 </p>
               </div>
+            )}
+          </div>
+
+          <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500 font-medium">
+            <span>Occupants Breakdown:</span>
+            <span className="font-bold text-slate-800">
+              {bachelorsCount} Bachelors • {familiesCount} Families
+            </span>
+          </div>
+        </div>
+
+        {/* Card B: Quick Navigation & Document Vault Gateway */}
+        <div className="bg-white p-6 rounded-2xl border border-slate-200/90 shadow-xs flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-4 border-b border-slate-200 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center">
+                  <ShieldCheck className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900">Document Vault & Fast Shortcuts</h3>
+                  <p className="text-[11px] text-slate-500 font-medium">Instant property operations and verification</p>
+                </div>
+              </div>
+              <Link href="/documents" className="text-xs font-bold text-indigo-600 hover:text-indigo-800">
+                Open Vault →
+              </Link>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 mt-3">
+              <Link 
+                href="/documents" 
+                className="p-3 rounded-xl border border-slate-200 hover:border-indigo-400 bg-slate-50/60 hover:bg-indigo-50/40 transition-all flex flex-col justify-between group"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-900 group-hover:text-indigo-700">Document Vault</span>
+                  <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-indigo-600 transition-transform group-hover:translate-x-0.5" />
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1 font-medium">
+                  Aadhars & Signed Agreements
+                </p>
+              </Link>
+
+              <Link 
+                href="/payments" 
+                className="p-3 rounded-xl border border-slate-200 hover:border-emerald-400 bg-slate-50/60 hover:bg-emerald-50/40 transition-all flex flex-col justify-between group"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-900 group-hover:text-emerald-700">Payment Ledger</span>
+                  <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-emerald-600 transition-transform group-hover:translate-x-0.5" />
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1 font-medium">
+                  Receipts, Dues & History
+                </p>
+              </Link>
+
+              <Link 
+                href="/rooms" 
+                className="p-3 rounded-xl border border-slate-200 hover:border-blue-400 bg-slate-50/60 hover:bg-blue-50/40 transition-all flex flex-col justify-between group"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-900 group-hover:text-blue-700">Rooms & Units</span>
+                  <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-blue-600 transition-transform group-hover:translate-x-0.5" />
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1 font-medium">
+                  Units, Floors & Rent Settings
+                </p>
+              </Link>
+
+              <Link 
+                href="/tenants" 
+                className="p-3 rounded-xl border border-slate-200 hover:border-purple-400 bg-slate-50/60 hover:bg-purple-50/40 transition-all flex flex-col justify-between group"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-900 group-hover:text-purple-700">Tenants Directory</span>
+                  <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-purple-600 transition-transform group-hover:translate-x-0.5" />
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1 font-medium">
+                  {activeTenants.length} Active Records & Profiles
+                </p>
+              </Link>
             </div>
           </div>
 
-          <div id="vault-section" className="mt-6 p-4 rounded-xl bg-slate-50 border border-slate-300">
-            <div className="flex items-center justify-between mb-1">
-              <div className="flex items-center gap-2">
-                <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                <span className="text-xs font-bold text-slate-900">Document Vault Ready</span>
-              </div>
-              <Link href="/documents" className="text-xs font-bold text-indigo-600 hover:underline">
-                View Vault →
-              </Link>
-            </div>
-            <p className="text-[11px] text-slate-600 font-medium">
-              Aadhar cards & signed agreements for Bachelors & Families are archived with encrypted signed URLs.
-            </p>
+          <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500 font-medium">
+            <span>Encrypted Storage:</span>
+            <span className="font-bold text-emerald-700">Online & Protected</span>
           </div>
         </div>
       </div>
-
-      {/* Edit Room Modal */}
-      {isEditModalOpen && editingRoom && (
-        <EditRoomModal
-          room={editingRoom}
-          isOpen={isEditModalOpen}
-          onClose={() => {
-            setIsEditModalOpen(false);
-            setEditingRoom(null);
-          }}
-          onSaved={handleRoomSaved}
-        />
-      )}
 
       {/* Record / Edit Payment Modal */}
       {isPaymentModalOpen && (

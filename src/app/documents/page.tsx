@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { 
   ShieldCheck, FileText, ArrowLeft, Download, Plus, 
-  Trash2, X 
+  Trash2, X, Eye 
 } from 'lucide-react';
 import { DocumentRecord, Tenant, Room, DocumentType } from '@/types/database';
 import { 
@@ -12,6 +12,7 @@ import {
   getLocalTenants, getLocalRooms 
 } from '@/lib/store/app-store';
 import { createClient } from '@/lib/supabase/client';
+import DocumentViewerModal from '@/components/documents/document-viewer-modal';
 
 export default function DocumentsPage() {
   const [documents, setDocuments] = useState<DocumentRecord[]>(() => {
@@ -27,6 +28,13 @@ export default function DocumentsPage() {
     return [];
   });
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [viewingDoc, setViewingDoc] = useState<DocumentRecord | null>(null);
+  const [isViewerOpen, setIsViewerOpen] = useState(false);
+
+  const handleViewDocument = (doc: DocumentRecord) => {
+    setViewingDoc(doc);
+    setIsViewerOpen(true);
+  };
 
   // New Document Modal Form State
   const [docType, setDocType] = useState<DocumentType>('AADHAR_CARD');
@@ -290,15 +298,26 @@ export default function DocumentsPage() {
                   </div>
                 </div>
 
-                <div className="pt-3 border-t border-slate-200 flex items-center justify-between">
+                <div className="pt-3 border-t border-slate-200 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleViewDocument(doc)}
+                    className="flex-1 text-center inline-flex items-center justify-center gap-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 py-2 rounded-lg shadow-2xs transition-colors cursor-pointer"
+                    title="View document preview"
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                    View
+                  </button>
                   <a
                     href={`/api/document-url?path=${encodeURIComponent(doc.storage_path)}`}
+                    download={doc.file_name}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="w-full text-center inline-flex items-center justify-center gap-1.5 text-xs font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 py-2 rounded-lg border border-indigo-200 transition-colors"
+                    className="flex-1 text-center inline-flex items-center justify-center gap-1.5 text-xs font-bold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 py-2 rounded-lg border border-slate-200 transition-colors"
+                    title="Download document"
                   >
                     <Download className="w-3.5 h-3.5" />
-                    Secure View / Download
+                    Download
                   </a>
                 </div>
               </div>
@@ -439,6 +458,16 @@ export default function DocumentsPage() {
           </div>
         </div>
       )}
+
+      {/* In-App Document Viewer Modal */}
+      <DocumentViewerModal
+        document={viewingDoc}
+        isOpen={isViewerOpen}
+        onClose={() => {
+          setIsViewerOpen(false);
+          setViewingDoc(null);
+        }}
+      />
     </div>
   );
 }

@@ -64,15 +64,9 @@ export default function RecordPaymentModal({
   onClose,
   onSaved,
 }: RecordPaymentModalProps) {
-  const [tenants] = useState<Tenant[]>(() => (propTenants && propTenants.length > 0 ? propTenants : getLocalTenants()));
-  const [rooms] = useState<Room[]>(() => (propRooms && propRooms.length > 0 ? propRooms : getLocalRooms()));
+  const [tenants, setTenants] = useState<Tenant[]>(() => (propTenants && propTenants.length > 0 ? propTenants : getLocalTenants()));
+  const [rooms, setRooms] = useState<Room[]>(() => (propRooms && propRooms.length > 0 ? propRooms : getLocalRooms()));
   const [allPayments, setAllPayments] = useState<Payment[]>(() => getLocalPayments());
-
-  useEffect(() => {
-    if (isOpen) {
-      setAllPayments(getLocalPayments());
-    }
-  }, [isOpen]);
 
   const defaultYearMonth = () => {
     const now = new Date();
@@ -87,6 +81,9 @@ export default function RecordPaymentModal({
     return defaultYearMonth();
   };
 
+  const profile = getLandlordProfile();
+  const defaultReceiver = profile.name ? `${profile.name} (Owner)` : 'Landlord';
+
   // Initial State Setup
   const [selectedTenantId, setSelectedTenantId] = useState(() => 
     payment?.tenant_id || preselectedTenantId || (tenants[0]?.id || '')
@@ -95,9 +92,6 @@ export default function RecordPaymentModal({
   const initialTenant = tenants.find((t) => t.id === selectedTenantId) || tenants[0];
   const initialRoomId = payment?.room_id || preselectedRoomId || (initialTenant?.room_id || rooms[0]?.id || '');
   const initialDue = payment?.amount_due !== undefined ? payment.amount_due : (initialTenant?.monthly_rent || 0);
-
-  const profile = getLandlordProfile();
-  const defaultReceiver = profile.name ? `${profile.name} (Owner)` : 'Landlord';
 
   const [paymentType, setPaymentType] = useState<PaymentType>(() => payment?.payment_type || 'RENT');
   const [selectedRoomId, setSelectedRoomId] = useState(initialRoomId);
@@ -113,6 +107,41 @@ export default function RecordPaymentModal({
 
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
+
+  // Re-sync all state when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      const currentTenants = propTenants && propTenants.length > 0 ? propTenants : getLocalTenants();
+      const currentRooms = propRooms && propRooms.length > 0 ? propRooms : getLocalRooms();
+      setTenants(currentTenants);
+      setRooms(currentRooms);
+      setAllPayments(getLocalPayments());
+
+      const tId = payment?.tenant_id || preselectedTenantId || (currentTenants[0]?.id || '');
+      const activeT = currentTenants.find((t) => t.id === tId) || currentTenants[0];
+      const rId = payment?.room_id || preselectedRoomId || (activeT?.room_id || currentRooms[0]?.id || '');
+      const defaultDue = payment?.amount_due !== undefined ? payment.amount_due : (activeT?.monthly_rent || 0);
+
+      setSelectedTenantId(tId);
+      setSelectedRoomId(rId);
+      setPaymentType(payment?.payment_type || 'RENT');
+      setBillingMonthYear(
+        payment?.billing_period_month && /^\d{4}-\d{2}/.test(payment.billing_period_month)
+          ? payment.billing_period_month.slice(0, 7)
+          : defaultYearMonth()
+      );
+      setAmountDue(String(defaultDue));
+      setAmountPaid(String(payment?.amount_paid ?? defaultDue));
+      setPaymentMethod(payment?.payment_method || 'UPI');
+      setPaymentStatus(payment?.payment_status || 'PAID');
+      setReceivedBy(payment?.received_by || defaultReceiver);
+      setTransactionRef(payment?.transaction_ref || '');
+      setPaymentDate(payment?.payment_date || new Date().toISOString().split('T')[0]);
+      setNotes(payment?.notes || '');
+      setSaving(false);
+      setSuccess(false);
+    }
+  }, [isOpen, payment, preselectedTenantId, preselectedRoomId, propTenants, propRooms]);
 
   const activeTenant = tenants.find((t) => t.id === selectedTenantId);
   const activeRoom = rooms.find((r) => r.id === selectedRoomId);
@@ -256,8 +285,8 @@ export default function RecordPaymentModal({
     }
   };
 
-  const dueNum = Number(amountDue) || 0;
-  const paidNum = Number(amountPaid) || 0;
+  const dueNum = Math.max(0, Number(amountDue) || 0);
+  const paidNum = Math.max(0, Number(amountPaid) || 0);
   const pendingNum = Math.max(0, dueNum - paidNum);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -681,6 +710,7 @@ export default function RecordPaymentModal({
               </label>
               <input
                 type="number"
+                min="0"
                 required
                 value={amountDue}
                 onChange={(e) => setAmountDue(e.target.value)}
@@ -694,6 +724,7 @@ export default function RecordPaymentModal({
               </label>
               <input
                 type="number"
+                min="0"
                 required
                 value={amountPaid}
                 onChange={(e) => {

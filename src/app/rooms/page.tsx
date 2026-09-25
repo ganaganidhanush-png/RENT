@@ -345,6 +345,8 @@ export default function RoomsPage() {
                             id: `pay-${Date.now()}`,
                             tenant_id: primaryTenant.id,
                             room_id: room.id,
+                            payment_type: 'RENT',
+                            total_target_amount: Number(primaryTenant.monthly_rent || room.base_rent),
                             billing_period_month: currentMonthIso,
                             billing_month: monthStr,
                             amount_due: Number(primaryTenant.monthly_rent || room.base_rent),

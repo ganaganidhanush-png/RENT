@@ -7,8 +7,11 @@ import {
   CheckCircle2, AlertCircle, RefreshCw, CreditCard, Receipt,
   Tag, FileText
 } from 'lucide-react';
-import { Payment, PaymentType } from '@/types/database';
-import { getLocalPayments, saveLocalPayment, deleteLocalPayment } from '@/lib/store/app-store';
+import { Payment, PaymentType, Tenant, Room } from '@/types/database';
+import { 
+  getLocalPayments, saveLocalPayment, deleteLocalPayment, 
+  getLocalTenants, getLocalRooms, mergeTenants, mergeRooms 
+} from '@/lib/store/app-store';
 import { createClient } from '@/lib/supabase/client';
 import RecordPaymentModal from '@/components/payments/record-payment-modal';
 import RentReceiptModal from '@/components/payments/rent-receipt-modal';
@@ -18,6 +21,15 @@ export default function PaymentsPage() {
     if (typeof window !== 'undefined') return getLocalPayments();
     return [];
   });
+  const [tenants, setTenants] = useState<Tenant[]>(() => {
+    if (typeof window !== 'undefined') return getLocalTenants();
+    return [];
+  });
+  const [rooms, setRooms] = useState<Room[]>(() => {
+    if (typeof window !== 'undefined') return getLocalRooms();
+    return [];
+  });
+
   const [categoryFilter, setCategoryFilter] = useState<'ALL' | PaymentType>('ALL');
   const [editingPayment, setEditingPayment] = useState<Payment | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -43,47 +55,45 @@ export default function PaymentsPage() {
     return merged;
   };
 
-  const loadPayments = async () => {
+  const loadAllData = async () => {
+    const localT = getLocalTenants();
+    const localR = getLocalRooms();
+    const localP = getLocalPayments();
+    setTenants(localT);
+    setRooms(localR);
+    setPayments(localP);
+
     try {
       const supabase = createClient();
-      const { data, error } = await supabase
-        .from('payments')
-        .select('*, room:rooms(*), tenant:tenants(*)')
-        .order('created_at', { ascending: false });
+      const [payRes, tenRes, roomRes] = await Promise.allSettled([
+        supabase.from('payments').select('*, room:rooms(*), tenant:tenants(*)').order('created_at', { ascending: false }),
+        supabase.from('tenants').select('*, room:rooms(*)').order('created_at', { ascending: false }),
+        supabase.from('rooms').select('*').order('room_number', { ascending: true }),
+      ]);
 
-      if (!error && data && data.length > 0) {
-        const local = getLocalPayments();
-        setPayments(deduplicate(data, local));
-      } else {
-        setPayments(getLocalPayments());
+      let mergedT = localT;
+      if (tenRes.status === 'fulfilled' && !tenRes.value.error && tenRes.value.data) {
+        mergedT = mergeTenants(localT, tenRes.value.data);
+        setTenants(mergedT);
       }
-    } catch {
-      setPayments(getLocalPayments());
+
+      if (roomRes.status === 'fulfilled' && !roomRes.value.error && roomRes.value.data) {
+        setRooms(mergeRooms(localR, roomRes.value.data, mergedT));
+      }
+
+      if (payRes.status === 'fulfilled' && !payRes.value.error && payRes.value.data && payRes.value.data.length > 0) {
+        setPayments(deduplicate(payRes.value.data, localP));
+      }
+    } catch (err) {
+      console.warn('Payments load data note:', err);
     }
   };
 
   useEffect(() => {
-    async function syncRemote() {
-      try {
-        const supabase = createClient();
-        const { data, error } = await supabase
-          .from('payments')
-          .select('*, room:rooms(*), tenant:tenants(*)')
-          .order('created_at', { ascending: false });
-
-        if (!error && data && data.length > 0) {
-          const local = getLocalPayments();
-          setPayments(deduplicate(data, local));
-        }
-      } catch (err) {
-        console.warn('Payments sync note:', err);
-      }
-    }
-
-    syncRemote();
+    loadAllData();
 
     const handleDataChange = () => {
-      setPayments(getLocalPayments());
+      loadAllData();
     };
 
     window.addEventListener('rentvault_data_updated', handleDataChange);
@@ -168,8 +178,25 @@ export default function PaymentsPage() {
     : payments.filter((p) => (p.payment_type || 'RENT') === categoryFilter);
 
   const totalCollected = filteredPayments.reduce((acc, p) => acc + Number(p.amount_paid || 0), 0);
-  const totalPending = filteredPayments.reduce((acc, p) => acc + Number(p.amount_pending || 0), 0);
-  const totalDue = filteredPayments.reduce((acc, p) => acc + Number(p.amount_due || 0), 0);
+
+  // Accurately compute outstanding dues without stacking historical slice snapshots
+  const cyclePendingMap = new Map<string, number>();
+  for (const p of filteredPayments) {
+    const periodKey = (p.billing_period_month || p.billing_month || p.id).slice(0, 7);
+    const key = `${p.tenant_id || ''}_${periodKey}_${p.payment_type || 'RENT'}`;
+    const pending = Number(p.amount_pending || 0);
+
+    if (p.payment_status === 'PAID' || pending === 0) {
+      cyclePendingMap.set(key, 0);
+    } else {
+      const cur = cyclePendingMap.get(key);
+      if (cur === undefined || (cur > 0 && pending < cur)) {
+        cyclePendingMap.set(key, pending);
+      }
+    }
+  }
+  const totalPending = Array.from(cyclePendingMap.values()).reduce((sum, v) => sum + v, 0);
+  const totalDue = totalCollected + totalPending;
 
   const getCategoryBadge = (type?: PaymentType) => {
     switch (type) {
@@ -296,7 +323,7 @@ export default function PaymentsPage() {
           </h2>
           <button
             type="button"
-            onClick={loadPayments}
+            onClick={loadAllData}
             className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 cursor-pointer"
           >
             <RefreshCw className="w-3 h-3" /> Refresh
@@ -343,15 +370,17 @@ export default function PaymentsPage() {
                 filteredPayments.map((p) => {
                   const isPaid = p.payment_status === 'PAID';
                   const isPending = p.payment_status === 'PENDING';
+                  const tenantObj = p.tenant || tenants.find((t) => t.id === p.tenant_id);
+                  const roomObj = p.room || rooms.find((r) => r.id === p.room_id) || tenantObj?.room;
 
                   return (
                     <tr key={p.id} className="hover:bg-slate-50 transition-colors">
                       <td className="py-3.5 px-4">
                         <span className="font-bold text-slate-900 block">
-                          {p.room?.room_number ? `Room ${p.room.room_number}` : 'Room Unit'}
+                          {roomObj?.room_number ? `Room ${roomObj.room_number}` : 'Room Unit'}
                         </span>
                         <span className="text-[11px] text-slate-600 font-semibold block">
-                          {p.tenant?.full_name || 'Tenant'}
+                          {tenantObj?.full_name || 'Tenant'}
                         </span>
                         {p.notes && (
                           <div className="mt-1 flex items-start gap-1 text-[11px] font-medium text-slate-600 bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5 max-w-xs">
@@ -450,6 +479,8 @@ export default function PaymentsPage() {
       {isModalOpen && (
         <RecordPaymentModal
           payment={editingPayment}
+          tenants={tenants}
+          rooms={rooms}
           isOpen={isModalOpen}
           onClose={() => {
             setIsModalOpen(false);
@@ -463,6 +494,8 @@ export default function PaymentsPage() {
       {isReceiptOpen && receiptPayment && (
         <RentReceiptModal
           payment={receiptPayment}
+          tenant={receiptPayment.tenant || tenants.find((t) => t.id === receiptPayment.tenant_id)}
+          room={receiptPayment.room || rooms.find((r) => r.id === receiptPayment.room_id)}
           isOpen={isReceiptOpen}
           onClose={() => {
             setIsReceiptOpen(false);

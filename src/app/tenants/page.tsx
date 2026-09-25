@@ -4,16 +4,18 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { 
   Users, Plus, Phone, ArrowLeft, Mail, Calendar, 
-  GraduationCap, Edit3, Trash2, CreditCard, LogOut, Sparkles 
+  GraduationCap, Edit3, Trash2, CreditCard, LogOut, Sparkles,
+  FileText, Eye, ShieldCheck
 } from 'lucide-react';
-import { Tenant, Room, Payment } from '@/types/database';
+import { Tenant, Room, Payment, DocumentRecord } from '@/types/database';
 import { 
   getLocalTenants, deleteLocalTenant, getLocalRooms, saveLocalTenant,
-  getLocalPayments, mergeTenants, mergeRooms 
+  getLocalPayments, getLocalDocuments, mergeTenants, mergeRooms 
 } from '@/lib/store/app-store';
 import { createClient } from '@/lib/supabase/client';
 import EditTenantModal from '@/components/tenants/edit-tenant-modal';
 import RecordPaymentModal from '@/components/payments/record-payment-modal';
+import DocumentViewerModal from '@/components/documents/document-viewer-modal';
 
 function getOrdinal(d: number) {
   if (d > 3 && d < 21) return 'th';
@@ -29,6 +31,9 @@ export default function TenantsPage() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [documents, setDocuments] = useState<DocumentRecord[]>([]);
+  const [viewingDoc, setViewingDoc] = useState<DocumentRecord | null>(null);
+  const [isViewerOpen, setIsViewerOpen] = useState(false);
   const [editingTenant, setEditingTenant] = useState<Tenant | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingPayment, setEditingPayment] = useState<Payment | null>(null);
@@ -41,16 +46,19 @@ export default function TenantsPage() {
       const localTenants = getLocalTenants();
       const localRooms = getLocalRooms();
       const localPayments = getLocalPayments();
+      const localDocs = getLocalDocuments();
       setTenants(localTenants);
       setRooms(localRooms);
       setPayments(localPayments);
+      setDocuments(localDocs);
 
       try {
         const supabase = createClient();
-        const [{ data: tenantsData }, { data: roomsData }, { data: paymentsData }] = await Promise.all([
+        const [{ data: tenantsData }, { data: roomsData }, { data: paymentsData }, { data: documentsData }] = await Promise.all([
           supabase.from('tenants').select('*, room:rooms(*)').order('created_at', { ascending: false }),
           supabase.from('rooms').select('*').order('floor').order('room_number'),
-          supabase.from('payments').select('*, room:rooms(*), tenant:tenants(*)').order('created_at', { ascending: false })
+          supabase.from('payments').select('*, room:rooms(*), tenant:tenants(*)').order('created_at', { ascending: false }),
+          supabase.from('documents').select('*').order('created_at', { ascending: false })
         ]);
 
         const mergedT = mergeTenants(localTenants, tenantsData || []);
@@ -62,6 +70,12 @@ export default function TenantsPage() {
           paymentsData.forEach((p) => pMap.set(p.id, p));
           localPayments.forEach((p) => pMap.set(p.id, p));
           setPayments(Array.from(pMap.values()));
+        }
+        if (documentsData && documentsData.length > 0) {
+          const dMap = new Map<string, DocumentRecord>();
+          documentsData.forEach((d) => dMap.set(d.id, d));
+          localDocs.forEach((d) => dMap.set(d.id, d));
+          setDocuments(Array.from(dMap.values()));
         }
       } catch (err) {
         console.warn('Tenants page fetch note:', err);
@@ -76,6 +90,7 @@ export default function TenantsPage() {
       setTenants(lt);
       setRooms(mergeRooms(lr, [], lt));
       setPayments(getLocalPayments());
+      setDocuments(getLocalDocuments());
     };
 
     window.addEventListener('rentvault_data_updated', handleDataChange);
@@ -459,6 +474,38 @@ export default function TenantsPage() {
                       </div>
                     );
                   })()}
+
+                  {/* Verified Vault Documents Preview Badges */}
+                  {(() => {
+                    const tenantDocs = documents.filter((d) => d.tenant_id === t.id);
+                    if (tenantDocs.length === 0) return null;
+
+                    return (
+                      <div className="mt-2.5 p-2 bg-indigo-50/50 border border-indigo-100 rounded-xl flex items-center justify-between text-[11px]">
+                        <div className="flex items-center gap-1.5 text-indigo-950 font-bold">
+                          <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" />
+                          <span>Vault Docs ({tenantDocs.length}):</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {tenantDocs.map((doc) => (
+                            <button
+                              key={doc.id}
+                              type="button"
+                              onClick={() => {
+                                setViewingDoc(doc);
+                                setIsViewerOpen(true);
+                              }}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-white text-indigo-700 border border-indigo-200 hover:bg-indigo-100 hover:text-indigo-900 transition-colors cursor-pointer shadow-2xs"
+                              title={`View ${doc.file_name}`}
+                            >
+                              <Eye className="w-3 h-3 text-indigo-600" />
+                              {doc.doc_type === 'AADHAR_CARD' ? 'Aadhar' : doc.doc_type === 'RENTAL_AGREEMENT' ? 'Agreement' : doc.doc_type === 'TENANT_PHOTO' ? 'Photo' : 'Doc'}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Card Footer: Financials & Actions */}
@@ -496,6 +543,8 @@ export default function TenantsPage() {
                           id: `pay-${Date.now()}`,
                           tenant_id: t.id,
                           room_id: t.room_id || '',
+                          payment_type: 'RENT',
+                          total_target_amount: Number(t.monthly_rent),
                           billing_period_month: currentMonthIso,
                           billing_month: monthStr,
                           amount_due: Number(t.monthly_rent),
@@ -562,6 +611,16 @@ export default function TenantsPage() {
           }}
         />
       )}
+
+      {/* In-App Document Viewer Modal */}
+      <DocumentViewerModal
+        document={viewingDoc}
+        isOpen={isViewerOpen}
+        onClose={() => {
+          setIsViewerOpen(false);
+          setViewingDoc(null);
+        }}
+      />
     </div>
   );
 }

@@ -2,16 +2,18 @@
 
 import React from 'react';
 import { X, Printer, Share2, CheckCircle2, Building2, User, Calendar, IndianRupee, FileText } from 'lucide-react';
-import { Payment, PaymentType } from '@/types/database';
+import { Payment, PaymentType, Tenant, Room } from '@/types/database';
 import { getLandlordProfile } from '@/lib/store/app-store';
 
 interface RentReceiptModalProps {
   payment: Payment | null;
+  tenant?: Tenant | null;
+  room?: Room | null;
   isOpen: boolean;
   onClose: () => void;
 }
 
-export default function RentReceiptModal({ payment, isOpen, onClose }: RentReceiptModalProps) {
+export default function RentReceiptModal({ payment, tenant, room, isOpen, onClose }: RentReceiptModalProps) {
   if (!isOpen || !payment) return null;
 
   const profile = getLandlordProfile();
@@ -20,8 +22,12 @@ export default function RentReceiptModal({ payment, isOpen, onClose }: RentRecei
   const amountDueNum = Number(payment.amount_due || 0);
   const isPaid = payment.payment_status === 'PAID';
 
-  const tenantName = payment.tenant?.full_name || 'Tenant';
-  const roomNumber = payment.room?.room_number || (payment.tenant?.room?.room_number ?? 'Unit');
+  const effectiveTenant = payment.tenant || tenant;
+  const effectiveRoom = payment.room || room || effectiveTenant?.room;
+
+  const tenantName = effectiveTenant?.full_name || 'Tenant';
+  const tenantPhone = effectiveTenant?.phone || '';
+  const roomNumber = effectiveRoom?.room_number || 'Unit';
   const billingMonth = payment.billing_month || payment.billing_period_month || 'Current Month';
 
   const getCategoryLabel = (type?: PaymentType) => {
@@ -61,7 +67,7 @@ ${payment.transaction_ref ? `*Ref / UTR:* ${payment.transaction_ref}\n` : ''}${p
 Thank you for your payment!`;
 
     const encoded = encodeURIComponent(text);
-    const phone = payment.tenant?.phone ? payment.tenant.phone.replace(/[^0-9]/g, '') : '';
+    const phone = tenantPhone ? tenantPhone.replace(/[^0-9]/g, '') : '';
     const url = phone ? `https://wa.me/91${phone}?text=${encoded}` : `https://api.whatsapp.com/send?text=${encoded}`;
     window.open(url, '_blank');
   };
