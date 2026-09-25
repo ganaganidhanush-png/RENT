@@ -136,7 +136,11 @@ export default function TenantsPage() {
     const now = new Date();
     const currentMonthIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
     const monthStr = now.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
-    const agreedTotal = Number(tenant.security_deposit_paid || roomObj?.security_deposit || 20000);
+    const agreedTotal = Number(
+      tenant.security_deposit_paid !== undefined && tenant.security_deposit_paid !== null
+        ? tenant.security_deposit_paid
+        : (roomObj?.security_deposit !== undefined && roomObj?.security_deposit !== null ? roomObj.security_deposit : 0)
+    );
     setEditingPayment({
       id: `pay-advance-${Date.now()}`,
       tenant_id: tenant.id,
@@ -446,9 +450,13 @@ export default function TenantsPage() {
                   {/* Smart Advance / Deposit Slices Status Tracker */}
                   {(() => {
                     const depositPayments = payments.filter((p) => p.tenant_id === t.id && p.payment_type === 'SECURITY_DEPOSIT');
-                    const totalAdvancePaid = depositPayments.reduce((sum, p) => sum + Number(p.amount_paid || 0), 0) || Number(t.security_deposit_paid || 0);
-                    const targetDeposit = Number(t.room?.security_deposit || t.security_deposit_paid || 0);
-                    const isAdvanceComplete = totalAdvancePaid >= targetDeposit && targetDeposit > 0;
+                    const targetDeposit = Number(
+                      t.security_deposit_paid !== undefined && t.security_deposit_paid !== null
+                        ? t.security_deposit_paid
+                        : (t.room?.security_deposit !== undefined && t.room?.security_deposit !== null ? t.room.security_deposit : 0)
+                    );
+                    const totalAdvancePaid = depositPayments.reduce((sum, p) => sum + Number(p.amount_paid || 0), 0);
+                    const isAdvanceComplete = targetDeposit === 0 || totalAdvancePaid >= targetDeposit;
                     const advancePending = Math.max(0, targetDeposit - totalAdvancePaid);
 
                     return (
@@ -458,7 +466,11 @@ export default function TenantsPage() {
                           Advance Slices:
                         </span>
                         <div className="flex items-center gap-1.5">
-                          {isAdvanceComplete ? (
+                          {targetDeposit === 0 ? (
+                            <span className="font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-md">
+                              🟢 Zero Advance (₹0 Agreed)
+                            </span>
+                          ) : isAdvanceComplete ? (
                             <span className="font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-md">
                               🟢 Full Deposit (₹{totalAdvancePaid.toLocaleString('en-IN')})
                             </span>

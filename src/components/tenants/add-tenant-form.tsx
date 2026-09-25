@@ -284,7 +284,7 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
           move_in_date: formData.moveInDate,
           lease_end_date: formData.leaseEndDate,
           monthly_rent: Math.max(0, Number(formData.monthlyRent) || 0),
-          security_deposit_paid: advancePaidTodayNum,
+          security_deposit_paid: totalDepositTarget,
           rent_due_day: Math.max(1, Math.min(31, Number(formData.rentDueDay || 5))),
           status: 'ACTIVE',
           room: selectedRoom,
@@ -671,6 +671,46 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
                 required
                 className="w-full text-xs font-bold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 focus:outline-none"
               />
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setFormData({ ...formData, securityDeposit: '0', advancePaidToday: '0' })}
+                  className={`px-2 py-0.5 text-[11px] font-bold rounded-md border transition-colors cursor-pointer ${
+                    formData.securityDeposit === '0'
+                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                      : 'bg-white text-emerald-800 border-emerald-300 hover:bg-emerald-50'
+                  }`}
+                >
+                  ⚡ ₹0 (Zero Advance)
+                </button>
+                {formData.monthlyRent && Number(formData.monthlyRent) > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, securityDeposit: String(Number(formData.monthlyRent)), advancePaidToday: String(Number(formData.monthlyRent)) })}
+                      className="px-2 py-0.5 text-[11px] font-bold rounded-md bg-white text-slate-700 border border-slate-300 hover:bg-slate-100 transition-colors cursor-pointer"
+                    >
+                      1 Mo Rent (₹{Number(formData.monthlyRent).toLocaleString('en-IN')})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, securityDeposit: String(Number(formData.monthlyRent) * 2), advancePaidToday: String(Number(formData.monthlyRent) * 2) })}
+                      className="px-2 py-0.5 text-[11px] font-bold rounded-md bg-white text-slate-700 border border-slate-300 hover:bg-slate-100 transition-colors cursor-pointer"
+                    >
+                      2 Mo Rent (₹{(Number(formData.monthlyRent) * 2).toLocaleString('en-IN')})
+                    </button>
+                  </>
+                )}
+                {currentSelectedRoom && Number(currentSelectedRoom.security_deposit) > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, securityDeposit: String(currentSelectedRoom.security_deposit), advancePaidToday: String(currentSelectedRoom.security_deposit) })}
+                    className="px-2 py-0.5 text-[11px] font-bold rounded-md bg-white text-indigo-700 border border-indigo-300 hover:bg-indigo-50 transition-colors cursor-pointer"
+                  >
+                    Room Deposit (₹{Number(currentSelectedRoom.security_deposit).toLocaleString('en-IN')})
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 
@@ -690,7 +730,13 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
               {(() => {
                 const depositTarget = Number(formData.securityDeposit) || 0;
                 const advanceToday = Number(formData.advancePaidToday) || 0;
-                if (advanceToday >= depositTarget && depositTarget > 0) {
+                if (depositTarget === 0) {
+                  return (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2.5 py-1 rounded-full whitespace-nowrap">
+                      🟢 Zero Advance Agreed (₹0 Required - Done ✓)
+                    </span>
+                  );
+                } else if (advanceToday >= depositTarget && depositTarget > 0) {
                   return (
                     <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2.5 py-1 rounded-full whitespace-nowrap">
                       🟢 Full Advance Paid (₹{advanceToday.toLocaleString('en-IN')})
@@ -734,11 +780,24 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
                 <div className="flex flex-wrap gap-1.5">
                   <button
                     type="button"
-                    onClick={() => setFormData({ ...formData, advancePaidToday: formData.securityDeposit })}
-                    className="px-2.5 py-1 text-xs font-bold bg-white text-indigo-700 border border-indigo-300 hover:bg-indigo-100 rounded-lg transition-colors cursor-pointer"
+                    onClick={() => setFormData({ ...formData, securityDeposit: '0', advancePaidToday: '0' })}
+                    className={`px-2.5 py-1 text-xs font-bold rounded-lg border transition-colors cursor-pointer ${
+                      formData.securityDeposit === '0'
+                        ? 'bg-emerald-600 text-white border-emerald-600'
+                        : 'bg-white text-emerald-800 border-emerald-300 hover:bg-emerald-50'
+                    }`}
                   >
-                    ⚡ Full (₹{Number(formData.securityDeposit || 0).toLocaleString('en-IN')})
+                    ⚡ Zero Advance (₹0)
                   </button>
+                  {Number(formData.securityDeposit) > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, advancePaidToday: formData.securityDeposit })}
+                      className="px-2.5 py-1 text-xs font-bold bg-white text-indigo-700 border border-indigo-300 hover:bg-indigo-100 rounded-lg transition-colors cursor-pointer"
+                    >
+                      ⚡ Full (₹{Number(formData.securityDeposit || 0).toLocaleString('en-IN')})
+                    </button>
+                  )}
                   {Number(formData.securityDeposit) > 5000 && (
                     <button
                       type="button"
@@ -757,13 +816,15 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
                       Slice: ₹10,000
                     </button>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => setFormData({ ...formData, advancePaidToday: '0' })}
-                    className="px-2.5 py-1 text-xs font-bold bg-white text-rose-700 border border-rose-300 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                  >
-                    Pay Later (₹0)
-                  </button>
+                  {Number(formData.securityDeposit) > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, advancePaidToday: '0' })}
+                      className="px-2.5 py-1 text-xs font-bold bg-white text-rose-700 border border-rose-300 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                    >
+                      Pay Later (₹0)
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

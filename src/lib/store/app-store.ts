@@ -579,7 +579,11 @@ export function getTenantAdvanceSummary(
   room?: Room | null,
   allPayments?: Payment[]
 ): AdvanceTrackingSummary {
-  const agreedAdvance = Number(tenant.security_deposit_paid || room?.security_deposit || 20000);
+  const agreedAdvance = Number(
+    tenant.security_deposit_paid !== undefined && tenant.security_deposit_paid !== null
+      ? tenant.security_deposit_paid
+      : (room?.security_deposit !== undefined && room?.security_deposit !== null ? room.security_deposit : 0)
+  );
   const paymentsList = allPayments || getLocalPayments();
   
   const advancePayments = paymentsList
@@ -593,7 +597,7 @@ export function getTenantAdvanceSummary(
 
   const totalPaid = advancePayments.reduce((sum, p) => sum + Number(p.amount_paid || 0), 0);
   const remainingUnpaid = Math.max(0, agreedAdvance - totalPaid);
-  const isFullyPaid = totalPaid >= agreedAdvance && agreedAdvance > 0;
+  const isFullyPaid = agreedAdvance === 0 || totalPaid >= agreedAdvance;
 
   const status: 'FULLY_PAID' | 'PARTIALLY_PAID' | 'UNPAID' = 
     isFullyPaid 

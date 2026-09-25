@@ -950,7 +950,11 @@ export default function DashboardView({
 
                         {/* Agreed Advance */}
                         <td className="py-3.5 px-4 font-black text-slate-900">
-                          ₹{summary.agreedAdvance.toLocaleString('en-IN')}
+                          {summary.agreedAdvance === 0 ? (
+                            <span className="text-emerald-700 font-bold">₹0 (Zero Advance)</span>
+                          ) : (
+                            `₹${summary.agreedAdvance.toLocaleString('en-IN')}`
+                          )}
                         </td>
 
                         {/* Paid So Far */}
@@ -1004,7 +1008,11 @@ export default function DashboardView({
 
                         {/* Status Badge */}
                         <td className="py-3.5 px-4">
-                          {summary.isFullyPaid ? (
+                          {summary.agreedAdvance === 0 ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                              <CheckCircle2 className="w-3 h-3" /> Zero Advance ✓
+                            </span>
+                          ) : summary.isFullyPaid ? (
                             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
                               <CheckCircle2 className="w-3 h-3" /> Done ✓
                             </span>

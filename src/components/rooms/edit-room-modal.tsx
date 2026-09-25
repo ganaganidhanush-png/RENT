@@ -211,6 +211,28 @@ export default function EditRoomModal({ room, isOpen, onClose, onSaved, isNew = 
                 onChange={(e) => setFormData({ ...formData, securityDeposit: Number(e.target.value) })}
                 className="w-full text-xs font-bold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 focus:outline-none"
               />
+              <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setFormData({ ...formData, securityDeposit: 0 })}
+                  className={`px-2 py-0.5 text-[11px] font-bold rounded-md border transition-colors cursor-pointer ${
+                    formData.securityDeposit === 0
+                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                      : 'bg-white text-emerald-800 border-emerald-300 hover:bg-emerald-50'
+                  }`}
+                >
+                  ⚡ ₹0 (No Deposit)
+                </button>
+                {formData.baseRent > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, securityDeposit: formData.baseRent })}
+                    className="px-2 py-0.5 text-[11px] font-bold rounded-md bg-white text-slate-700 border border-slate-300 hover:bg-slate-100 transition-colors cursor-pointer"
+                  >
+                    1 Mo (₹{formData.baseRent.toLocaleString('en-IN')})
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 

@@ -151,7 +151,11 @@ export default function RecordPaymentModal({
   const activeRoom = rooms.find((r) => r.id === selectedRoomId);
 
   // 1. Advance / Security Deposit Smart Slices Calculations
-  const targetAdvanceTotal = Number(activeTenant?.security_deposit_paid || activeRoom?.security_deposit || 20000);
+  const targetAdvanceTotal = Number(
+    activeTenant?.security_deposit_paid !== undefined && activeTenant?.security_deposit_paid !== null
+      ? activeTenant.security_deposit_paid
+      : (activeRoom?.security_deposit !== undefined && activeRoom?.security_deposit !== null ? activeRoom.security_deposit : 0)
+  );
   const pastAdvancePayments = allPayments.filter((p) =>
     p.tenant_id === selectedTenantId &&
     p.payment_type === 'SECURITY_DEPOSIT' &&
@@ -273,7 +277,11 @@ export default function RecordPaymentModal({
         p.id !== payment?.id
       );
       const chosenAdvancePaid = chosenPastAdvance.reduce((a, p) => a + Number(p.amount_paid || 0), 0);
-      const chosenTargetAdvance = Number(chosen.security_deposit_paid || 20000);
+      const chosenTargetAdvance = Number(
+        chosen.security_deposit_paid !== undefined && chosen.security_deposit_paid !== null
+          ? chosen.security_deposit_paid
+          : (activeRoom?.security_deposit !== undefined && activeRoom?.security_deposit !== null ? activeRoom.security_deposit : 0)
+      );
       const chosenRemainingAdvance = Math.max(0, chosenTargetAdvance - chosenAdvancePaid);
 
       if (paymentType === 'RENT') {
@@ -722,10 +730,12 @@ export default function RecordPaymentModal({
                 </div>
                 <div className="flex justify-between text-[11px] font-bold text-purple-950">
                   <span>
-                    {Math.round(((totalAdvanceCollectedSoFar + paidNum) / (targetAdvanceTotal || 1)) * 100)}% Total Advance Paid
+                    {targetAdvanceTotal === 0
+                      ? '100% (Zero Advance Agreement)'
+                      : `${Math.round(((totalAdvanceCollectedSoFar + paidNum) / (targetAdvanceTotal || 1)) * 100)}% Total Advance Paid`}
                   </span>
                   <span>
-                    {Math.max(0, targetAdvanceTotal - totalAdvanceCollectedSoFar - paidNum) === 0 ? (
+                    {targetAdvanceTotal === 0 || Math.max(0, targetAdvanceTotal - totalAdvanceCollectedSoFar - paidNum) === 0 ? (
                       <span className="text-emerald-700 font-black">🎉 Advance count fully settled (Done ✓)!</span>
                     ) : (
                       <span className="text-purple-900 font-medium">₹{Math.max(0, targetAdvanceTotal - totalAdvanceCollectedSoFar - paidNum).toLocaleString('en-IN')} will remain unpaid</span>
@@ -738,6 +748,22 @@ export default function RecordPaymentModal({
               {remainingAdvanceToCollect > 0 && (
                 <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-purple-200/60">
                   <span className="text-[11px] font-bold text-purple-900">Choose Piece Amount:</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAmountDue('0');
+                      setAmountPaid('0');
+                      setPaymentStatus('PAID');
+                      setNotes(`Zero Advance / Deposit Waived for ${activeTenant?.full_name || 'Tenant'}`);
+                    }}
+                    className={`px-2.5 py-1 text-xs font-bold rounded-lg border transition-all cursor-pointer ${
+                      paidNum === 0 && dueNum === 0
+                        ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
+                        : 'bg-white text-emerald-800 border-emerald-300 hover:bg-emerald-100'
+                    }`}
+                  >
+                    ⚡ ₹0 (Zero Advance)
+                  </button>
                   {generateSlicePresets(remainingAdvanceToCollect, targetAdvanceTotal).map((sliceAmt) => (
                     <button
                       key={sliceAmt}
@@ -845,7 +871,7 @@ export default function RecordPaymentModal({
                   const val = e.target.value;
                   setAmountPaid(val);
                   const pNum = Number(val) || 0;
-                  if (pNum >= dueNum && dueNum > 0) setPaymentStatus('PAID');
+                  if (dueNum === 0 || (pNum >= dueNum && dueNum > 0)) setPaymentStatus('PAID');
                   else if (pNum > 0) setPaymentStatus('PARTIAL');
                   else setPaymentStatus('PENDING');
                 }}

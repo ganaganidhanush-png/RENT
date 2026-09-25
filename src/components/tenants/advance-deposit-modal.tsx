@@ -39,7 +39,7 @@ export default function AdvanceDepositModal({
 
   const percentage = agreedAdvance > 0 
     ? Math.min(100, Math.round((totalPaid / agreedAdvance) * 100)) 
-    : 0;
+    : 100;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
@@ -64,7 +64,11 @@ export default function AdvanceDepositModal({
                 <h2 className="text-lg font-black text-slate-900 tracking-tight">
                   One-Time Advance Deposit
                 </h2>
-                {isFullyPaid ? (
+                {agreedAdvance === 0 ? (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Done (Zero Advance Agreed)
+                  </span>
+                ) : isFullyPaid ? (
                   <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Done (Fully Paid)
                   </span>
@@ -100,7 +104,9 @@ export default function AdvanceDepositModal({
             <div className="flex items-center justify-between text-xs font-bold">
               <span className="text-slate-700">Advance Collection Progress</span>
               <span className={isFullyPaid ? 'text-emerald-700' : 'text-slate-900'}>
-                {percentage}% ({isFullyPaid ? 'Fully Cleared • Done' : `₹${remainingUnpaid.toLocaleString('en-IN')} Remaining`})
+                {agreedAdvance === 0
+                  ? '100% (Zero Advance Required • Done ✓)'
+                  : `${percentage}% (${isFullyPaid ? 'Fully Cleared • Done' : `₹${remainingUnpaid.toLocaleString('en-IN')} Remaining`})`}
               </span>
             </div>
             <div className="w-full bg-slate-200 rounded-full h-3 overflow-hidden">
@@ -122,7 +128,7 @@ export default function AdvanceDepositModal({
                   Agreed Total
                 </span>
                 <p className="text-lg font-black text-slate-900 mt-0.5">
-                  ₹{agreedAdvance.toLocaleString('en-IN')}
+                  {agreedAdvance === 0 ? '₹0 (Zero Advance)' : `₹${agreedAdvance.toLocaleString('en-IN')}`}
                 </p>
               </div>
 
@@ -268,9 +274,11 @@ export default function AdvanceDepositModal({
             <span className="text-base shrink-0">💡</span>
             <div>
               <strong>One-Time Advance Policy:</strong> Security deposit is collected once per tenancy.
-              {isFullyPaid 
-                ? ' This tenant has fully paid their agreed advance count, so advance is complete and DONE.'
-                : ' Once all installment pieces equal the agreed total, it will be marked DONE.'}
+              {agreedAdvance === 0
+                ? ' This tenant was registered with a Zero Advance agreement (₹0 deposit required), so advance is fully settled and DONE.'
+                : isFullyPaid 
+                  ? ' This tenant has fully paid their agreed advance count, so advance is complete and DONE.'
+                  : ' Once all installment pieces equal the agreed total, it will be marked DONE.'}
               {' '}Monthly Rent, Maintenance, and Electricity bills are independent and tracked separately.
             </div>
           </div>
@@ -279,7 +287,11 @@ export default function AdvanceDepositModal({
         {/* Modal Footer */}
         <div className="p-4 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
           <div className="text-xs font-semibold text-slate-600">
-            {isFullyPaid ? (
+            {agreedAdvance === 0 ? (
+              <span className="text-emerald-700 font-bold flex items-center gap-1">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Zero Advance Agreement • Done ✓
+              </span>
+            ) : isFullyPaid ? (
               <span className="text-emerald-700 font-bold flex items-center gap-1">
                 <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Advance Cleared & Done
               </span>

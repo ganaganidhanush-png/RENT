@@ -574,6 +574,28 @@ function EditTenantModalContent({
                 onChange={(e) => setSecurityDeposit(e.target.value)}
                 className="w-full text-xs font-bold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:outline-none"
               />
+              <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setSecurityDeposit('0')}
+                  className={`px-2 py-0.5 text-[11px] font-bold rounded-md border transition-colors cursor-pointer ${
+                    securityDeposit === '0'
+                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                      : 'bg-white text-emerald-800 border-emerald-300 hover:bg-emerald-50'
+                  }`}
+                >
+                  ⚡ ₹0 (Zero Advance)
+                </button>
+                {monthlyRent && Number(monthlyRent) > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setSecurityDeposit(String(Number(monthlyRent)))}
+                    className="px-2 py-0.5 text-[11px] font-bold rounded-md bg-white text-slate-700 border border-slate-300 hover:bg-slate-100 transition-colors cursor-pointer"
+                  >
+                    1 Mo Rent (₹{Number(monthlyRent).toLocaleString('en-IN')})
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 
