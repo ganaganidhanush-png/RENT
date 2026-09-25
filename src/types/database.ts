@@ -71,6 +71,7 @@ export interface DocumentRecord {
   created_at?: string;
   tenant?: Tenant | null;
   room?: Room | null;
+  file_data?: string | null;
 }
 
 export interface Payment {

@@ -5,9 +5,11 @@ import {
   X, Download, Printer, ExternalLink, FileText, 
   ShieldCheck, ZoomIn, ZoomOut, RotateCw, Eye, 
   CheckCircle2, Building2, User, Calendar, Lock,
-  AlertCircle, RefreshCw, Maximize2
+  RefreshCw, Upload
 } from 'lucide-react';
 import { DocumentRecord } from '@/types/database';
+import { getDocumentBlobUrl, storeDocumentFile, fileToDataUrl } from '@/lib/store/document-storage';
+import { saveLocalDocument } from '@/lib/store/app-store';
 
 interface DocumentViewerModalProps {
   document: DocumentRecord | null;
@@ -20,51 +22,81 @@ export default function DocumentViewerModal({ document, isOpen, onClose }: Docum
   return <DocumentViewerContent document={document} onClose={onClose} />;
 }
 
-function DocumentViewerContent({ document, onClose }: { document: DocumentRecord; onClose: () => void }) {
-  const [signedUrl, setSignedUrl] = useState<string | null>(null);
+function DocumentViewerContent({ document: initialDoc, onClose }: { document: DocumentRecord; onClose: () => void }) {
+  const [doc, setDoc] = useState<DocumentRecord>(initialDoc);
+  const [fileUrl, setFileUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [fetchError, setFetchError] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
 
-  const isPdf = document.mime_type?.includes('pdf') || document.file_name.toLowerCase().endsWith('.pdf');
-  const isImage = 
-    document.mime_type?.startsWith('image/') || 
-    /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(document.file_name);
+  const isPdf = 
+    doc.mime_type?.includes('pdf') || 
+    doc.file_name.toLowerCase().endsWith('.pdf') ||
+    doc.file_data?.startsWith('data:application/pdf');
 
-  // Fetch signed URL or check if file exists
+  const isImage = 
+    doc.mime_type?.startsWith('image/') || 
+    /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(doc.file_name) ||
+    doc.file_data?.startsWith('data:image/');
+
+  // Resolve the exact file binary from local cache, IndexedDB, or Supabase
   useEffect(() => {
     let isMounted = true;
-    async function fetchUrl() {
+
+    async function resolveFileUrl() {
       setLoading(true);
-      setFetchError(false);
+
+      // 1. Direct Base64 data URL
+      if (doc.file_data) {
+        if (isMounted) {
+          setFileUrl(doc.file_data);
+          setLoading(false);
+        }
+        return;
+      }
+
+      // 2. Browser IndexedDB Blob URL (stores raw uploaded PDF/Image files)
       try {
-        const res = await fetch(`/api/document-url?path=${encodeURIComponent(document.storage_path)}&format=json`);
+        const localBlobUrl = 
+          (await getDocumentBlobUrl(doc.id)) || 
+          (await getDocumentBlobUrl(doc.storage_path));
+
+        if (localBlobUrl && isMounted) {
+          setFileUrl(localBlobUrl);
+          setLoading(false);
+          return;
+        }
+      } catch (err) {
+        console.warn('Local blob check note:', err);
+      }
+
+      // 3. Remote Supabase Storage signed URL
+      try {
+        const res = await fetch(`/api/document-url?path=${encodeURIComponent(doc.storage_path)}&format=json`);
         if (res.ok) {
           const data = await res.json();
           if (isMounted && data.signedUrl) {
-            setSignedUrl(data.signedUrl);
+            setFileUrl(data.signedUrl);
             setLoading(false);
             return;
           }
         }
-        if (isMounted) {
-          setFetchError(true);
-          setLoading(false);
-        }
       } catch {
-        if (isMounted) {
-          setFetchError(true);
-          setLoading(false);
-        }
+        // ignore
+      }
+
+      if (isMounted) {
+        setFileUrl(null);
+        setLoading(false);
       }
     }
 
-    fetchUrl();
+    resolveFileUrl();
+
     return () => {
       isMounted = false;
     };
-  }, [document.storage_path]);
+  }, [doc]);
 
   const handlePrint = () => {
     window.print();
@@ -76,6 +108,71 @@ function DocumentViewerContent({ document, onClose }: { document: DocumentRecord
   const handleResetView = () => {
     setZoom(1);
     setRotation(0);
+  };
+
+  const handleDownload = () => {
+    if (fileUrl) {
+      const a = window.document.createElement('a');
+      a.href = fileUrl;
+      a.download = doc.file_name;
+      window.document.body.appendChild(a);
+      a.click();
+      window.document.body.removeChild(a);
+    } else {
+      window.open(`/api/document-url?path=${encodeURIComponent(doc.storage_path)}`, '_blank');
+    }
+  };
+
+  const handleOpenInNewTab = () => {
+    if (!fileUrl) {
+      window.open(`/api/document-url?path=${encodeURIComponent(doc.storage_path)}`, '_blank');
+      return;
+    }
+
+    if (fileUrl.startsWith('data:application/pdf')) {
+      const newTab = window.open();
+      if (newTab) {
+        newTab.document.write(
+          `<!DOCTYPE html><html><head><title>${doc.file_name}</title><style>body,html{margin:0;height:100%;overflow:hidden;background:#525659;}</style></head><body><iframe src="${fileUrl}" width="100%" height="100%" style="border:none;"></iframe></body></html>`
+        );
+      } else {
+        window.open(fileUrl, '_blank');
+      }
+    } else {
+      window.open(fileUrl, '_blank');
+    }
+  };
+
+  const handleAttachFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setLoading(true);
+    let fileData: string | null = null;
+    if (file.size <= 3 * 1024 * 1024) {
+      try {
+        fileData = await fileToDataUrl(file);
+      } catch {
+        // ignore
+      }
+    }
+
+    await storeDocumentFile(doc.id, file, file.name, file.type);
+    await storeDocumentFile(doc.storage_path, file, file.name, file.type);
+
+    const updatedDoc: DocumentRecord = {
+      ...doc,
+      file_name: file.name,
+      mime_type: file.type || 'application/pdf',
+      file_size_bytes: file.size,
+      file_data: fileData,
+    };
+    saveLocalDocument(updatedDoc);
+    setDoc(updatedDoc);
+
+    const blobUrl = URL.createObjectURL(file);
+    setFileUrl(fileData || blobUrl);
+    setLoading(false);
   };
 
   const getDocTypeBadge = (type: string) => {
@@ -95,37 +192,36 @@ function DocumentViewerContent({ document, onClose }: { document: DocumentRecord
     }
   };
 
-  const badge = getDocTypeBadge(document.doc_type);
-  const downloadUrl = signedUrl || `/api/document-url?path=${encodeURIComponent(document.storage_path)}`;
+  const badge = getDocTypeBadge(doc.doc_type);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-white border border-slate-300 rounded-2xl shadow-2xl w-full max-w-5xl h-[92vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-6 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="bg-white border border-slate-300 rounded-2xl shadow-2xl w-full max-w-5xl h-[94vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
         
         {/* Top Header Bar */}
-        <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between shrink-0 border-b border-slate-800">
+        <div className="px-4 sm:px-6 py-3 bg-slate-900 text-white flex items-center justify-between shrink-0 border-b border-slate-800">
           <div className="flex items-center gap-3 overflow-hidden">
             <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white shrink-0">
               <FileText className="w-4 h-4" />
             </div>
             <div className="overflow-hidden">
               <div className="flex items-center gap-2">
-                <h2 className="text-sm font-bold text-white truncate max-w-sm sm:max-w-md" title={document.file_name}>
-                  {document.file_name}
+                <h2 className="text-sm font-bold text-white truncate max-w-xs sm:max-w-md" title={doc.file_name}>
+                  {doc.file_name}
                 </h2>
                 <span className={`hidden sm:inline-block px-2 py-0.5 rounded-full text-[10px] font-bold border ${badge.color}`}>
                   {badge.label}
                 </span>
               </div>
               <p className="text-[11px] text-slate-400 truncate">
-                {document.tenant?.full_name ? `Tenant: ${document.tenant.full_name}` : 'General Archive'} • {document.room?.room_number ? `Room ${document.room.room_number}` : 'All Rooms'}
+                {doc.tenant?.full_name ? `Tenant: ${doc.tenant.full_name}` : 'General Archive'} • {doc.room?.room_number ? `Room ${doc.room.room_number}` : 'All Units'}
               </p>
             </div>
           </div>
 
           {/* Action Tools */}
           <div className="flex items-center gap-1.5 shrink-0">
-            {isImage && signedUrl && (
+            {isImage && fileUrl && (
               <div className="hidden sm:flex items-center gap-1 mr-2 bg-slate-800 p-1 rounded-lg border border-slate-700">
                 <button
                   type="button"
@@ -163,6 +259,18 @@ function DocumentViewerContent({ document, onClose }: { document: DocumentRecord
               </div>
             )}
 
+            {fileUrl && (
+              <button
+                type="button"
+                onClick={handleOpenInNewTab}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-lg text-xs font-bold border border-slate-700 transition-colors cursor-pointer"
+                title="Open in Full Browser Tab"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">New Tab</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={handlePrint}
@@ -172,17 +280,15 @@ function DocumentViewerContent({ document, onClose }: { document: DocumentRecord
               <Printer className="w-4 h-4" />
             </button>
 
-            <a
-              href={downloadUrl}
-              download={document.file_name}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors"
+            <button
+              type="button"
+              onClick={handleDownload}
+              className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors cursor-pointer"
               title="Download File"
             >
               <Download className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Download</span>
-            </a>
+            </button>
 
             <button
               type="button"
@@ -196,149 +302,118 @@ function DocumentViewerContent({ document, onClose }: { document: DocumentRecord
         </div>
 
         {/* Viewer Canvas Area */}
-        <div className="flex-1 bg-slate-100 overflow-auto relative flex items-center justify-center p-4">
+        <div className="flex-1 bg-slate-900/95 overflow-hidden relative flex items-center justify-center">
           {loading ? (
             <div className="text-center p-8 space-y-3">
-              <RefreshCw className="w-8 h-8 text-indigo-600 animate-spin mx-auto" />
-              <p className="text-xs font-bold text-slate-700">Loading secure preview...</p>
+              <RefreshCw className="w-8 h-8 text-indigo-400 animate-spin mx-auto" />
+              <p className="text-xs font-bold text-slate-300">Loading exact document file...</p>
             </div>
-          ) : signedUrl && isImage ? (
+          ) : fileUrl && isImage ? (
             // Image Previewer
-            <div className="max-w-full max-h-full flex items-center justify-center overflow-auto">
+            <div className="w-full h-full flex items-center justify-center p-4 overflow-auto">
               <img
-                src={signedUrl}
-                alt={document.file_name}
+                src={fileUrl}
+                alt={doc.file_name}
                 style={{
                   transform: `scale(${zoom}) rotate(${rotation}deg)`,
                   transition: 'transform 0.15s ease-out',
                 }}
-                className="max-h-[80vh] object-contain rounded-lg shadow-lg border border-slate-300 bg-white"
+                className="max-h-[82vh] max-w-full object-contain rounded-lg shadow-2xl border border-slate-700 bg-black/40"
               />
             </div>
-          ) : signedUrl && isPdf ? (
-            // PDF Previewer
-            <div className="w-full h-full flex flex-col rounded-xl overflow-hidden border border-slate-300 bg-white shadow-sm">
+          ) : fileUrl && isPdf ? (
+            // Native PDF Interactive Viewer with Object + iFrame fallback
+            <div className="w-full h-full flex flex-col bg-slate-800">
+              <object
+                data={`${fileUrl}#toolbar=1&navpanes=0&scrollbar=1`}
+                type="application/pdf"
+                className="w-full h-full"
+              >
+                <iframe
+                  src={`${fileUrl}#toolbar=1&navpanes=0&scrollbar=1`}
+                  title={doc.file_name}
+                  className="w-full h-full border-none"
+                >
+                  <div className="p-8 text-center space-y-4 text-white">
+                    <p className="text-sm font-semibold">
+                      Your browser does not display inline PDFs in this container.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleOpenInNewTab}
+                      className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-bold cursor-pointer"
+                    >
+                      <ExternalLink className="w-4 h-4" /> Open Full PDF File
+                    </button>
+                  </div>
+                </iframe>
+              </object>
+            </div>
+          ) : fileUrl ? (
+            // General file fallback (render in iframe or offer view)
+            <div className="w-full h-full flex flex-col bg-slate-800">
               <iframe
-                src={`${signedUrl}#toolbar=1&navpanes=0&scrollbar=1`}
-                title={document.file_name}
+                src={fileUrl}
+                title={doc.file_name}
                 className="w-full h-full border-none"
               />
             </div>
           ) : (
-            // Digital Vault Verified Certificate View (for demo files, local records, or offline storage)
-            <div className="max-w-2xl w-full bg-white border-2 border-slate-200 rounded-2xl shadow-lg p-6 sm:p-8 space-y-6 animate-in fade-in duration-300">
-              {/* Certificate Header */}
-              <div className="text-center border-b border-slate-200 pb-5">
-                <div className="w-14 h-14 rounded-2xl bg-indigo-50 border-2 border-indigo-200 text-indigo-700 flex items-center justify-center mx-auto mb-3 shadow-xs">
-                  <ShieldCheck className="w-8 h-8" />
-                </div>
-                <span className="text-[11px] font-black uppercase tracking-wider text-indigo-700 bg-indigo-50 px-3 py-1 rounded-full border border-indigo-200 inline-block mb-1.5">
-                  RentVault Verified Vault Record
+            // Placeholder view when record has no attached physical binary file
+            <div className="max-w-lg w-full mx-4 bg-white border-2 border-slate-200 rounded-2xl shadow-2xl p-6 sm:p-8 space-y-5 text-center animate-in fade-in duration-300">
+              <div className="w-14 h-14 rounded-2xl bg-slate-100 border border-slate-300 text-slate-700 flex items-center justify-center mx-auto shadow-xs">
+                <FileText className="w-7 h-7" />
+              </div>
+              <div className="space-y-1">
+                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${badge.color}`}>
+                  {badge.label}
                 </span>
-                <h3 className="text-lg font-black text-slate-900 tracking-tight">
-                  {document.file_name}
+                <h3 className="text-base font-black text-slate-900 mt-2">
+                  {doc.file_name}
                 </h3>
-                <p className="text-xs text-slate-600 mt-1">
-                  Official Encrypted ID & Legal Lease Archive Record
+                <p className="text-xs text-slate-600 max-w-sm mx-auto">
+                  This is a sample or legacy metadata record without an attached physical binary file.
                 </p>
               </div>
 
-              {/* Document Metadata Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1">
-                    <FileText className="w-3 h-3 text-indigo-600" />
-                    Document Category
-                  </span>
-                  <p className="font-extrabold text-slate-900 text-sm">
-                    {badge.label}
-                  </p>
-                </div>
-
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1">
-                    <User className="w-3 h-3 text-indigo-600" />
-                    Associated Tenant
-                  </span>
-                  <p className="font-extrabold text-slate-900 text-sm">
-                    {document.tenant?.full_name || 'General Property Document'}
-                  </p>
-                  {document.tenant?.phone && (
-                    <span className="text-[10px] text-slate-500 font-semibold block">
-                      Phone: {document.tenant.phone}
-                    </span>
-                  )}
-                </div>
-
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1">
-                    <Building2 className="w-3 h-3 text-indigo-600" />
-                    Assigned Unit
-                  </span>
-                  <p className="font-extrabold text-slate-900 text-sm">
-                    {document.room?.room_number ? `Room ${document.room.room_number}` : 'Property Unit'}
-                  </p>
-                </div>
-
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1">
-                    <Calendar className="w-3 h-3 text-indigo-600" />
-                    Archived Date
-                  </span>
-                  <p className="font-extrabold text-slate-900 text-sm">
-                    {document.created_at ? new Date(document.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : 'Verified'}
-                  </p>
-                </div>
+              {/* Attach File Right Here */}
+              <div className="p-4 bg-indigo-50/60 border-2 border-dashed border-indigo-200 rounded-xl space-y-2">
+                <span className="text-xs font-bold text-slate-800 block">
+                  Attach your exact PDF or image to this record:
+                </span>
+                <p className="text-[11px] text-slate-600">
+                  Select your original PDF file to view and archive it securely.
+                </p>
+                <label className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors cursor-pointer mt-1">
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Choose PDF / Image File</span>
+                  <input
+                    type="file"
+                    accept="application/pdf,image/*"
+                    onChange={handleAttachFile}
+                    className="hidden"
+                  />
+                </label>
               </div>
 
-              {/* Security & Verification Banner */}
-              <div className="p-4 bg-emerald-50/80 border border-emerald-200 rounded-xl flex items-start gap-3">
-                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
-                <div className="text-xs">
-                  <span className="font-bold text-emerald-950 block">Encrypted Document Verified</span>
-                  <p className="text-emerald-800 text-[11px] mt-0.5 leading-relaxed">
-                    This document was cryptographically sealed in the RentVault tenant vault at storage path:
-                    <span className="font-mono text-[10px] block text-emerald-900 bg-emerald-100/60 p-1 rounded mt-1 break-all">
-                      {document.storage_path}
-                    </span>
-                  </p>
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex flex-col sm:flex-row items-center gap-3 pt-2">
-                <a
-                  href={downloadUrl}
-                  download={document.file_name}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-full sm:flex-1 py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold text-center flex items-center justify-center gap-2 shadow-xs transition-colors"
-                >
-                  <Download className="w-4 h-4" /> Download Raw Document File
-                </a>
-                <button
-                  type="button"
-                  onClick={handlePrint}
-                  className="w-full sm:w-auto py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold border border-slate-300 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-                >
-                  <Printer className="w-4 h-4" /> Print Vault Record
-                </button>
+              <div className="text-[11px] text-slate-500 font-mono">
+                Vault Path: {doc.storage_path}
               </div>
             </div>
           )}
         </div>
 
         {/* Bottom Footer Details */}
-        <div className="px-5 py-2.5 bg-slate-50 border-t border-slate-200 text-[11px] text-slate-600 flex flex-wrap items-center justify-between gap-2 shrink-0">
+        <div className="px-5 py-2.5 bg-slate-900 border-t border-slate-800 text-[11px] text-slate-400 flex flex-wrap items-center justify-between gap-2 shrink-0">
           <div className="flex items-center gap-2">
-            <span className="flex items-center gap-1 font-semibold text-slate-700">
-              <Lock className="w-3 h-3 text-emerald-600" /> AES-256 Cloud Vault
+            <span className="flex items-center gap-1 font-semibold text-slate-300">
+              <Lock className="w-3 h-3 text-emerald-400" /> Vault Storage
             </span>
             <span>•</span>
-            <span className="font-mono text-slate-500 text-[10px] truncate max-w-xs">{document.storage_path}</span>
+            <span className="font-mono text-slate-400 text-[10px] truncate max-w-xs">{doc.storage_path}</span>
           </div>
-          <span className="font-semibold text-slate-500">
-            {document.file_size_bytes ? `${Math.round(document.file_size_bytes / 1024)} KB` : 'Verified Format'}
+          <span className="font-semibold text-slate-400">
+            {doc.file_size_bytes ? `${Math.round(doc.file_size_bytes / 1024)} KB` : 'PDF Document'}
           </span>
         </div>
 

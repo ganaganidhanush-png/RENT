@@ -11,6 +11,7 @@ import Link from 'next/link';
 import { Room, Tenant, BachelorOccupant, TenantType, Payment, DocumentRecord } from '@/types/database';
 import { DEFAULT_ROOMS } from '@/lib/constants/rooms';
 import { getLocalRooms, saveLocalTenant, saveLocalPayment, saveLocalDocument } from '@/lib/store/app-store';
+import { storeDocumentFile, fileToDataUrl } from '@/lib/store/document-storage';
 
 interface AddTenantFormProps {
   vacantRooms?: Room[];
@@ -193,23 +194,21 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
     }
   };
 
-  const uploadToVault = async (file: File, tenantId: string, docType: string) => {
+  const uploadToVault = async (file: File, tenantId: string, docType: string, filePath: string, docId?: string) => {
     try {
       const supabase = createClient();
-      const fileExt = file.name.split('.').pop();
-      const filePath = `tenants/${tenantId}/${docType}_${Date.now()}.${fileExt}`;
-
       await supabase.storage
         .from('tenant-vault')
-        .upload(filePath, file, { cacheControl: '3600', upsert: false });
+        .upload(filePath, file, { cacheControl: '3600', upsert: true });
 
       await supabase.from('documents').insert({
+        id: docId,
         tenant_id: tenantId,
         room_id: formData.roomId,
         doc_type: docType,
         storage_path: filePath,
         file_name: file.name,
-        mime_type: file.type,
+        mime_type: file.type || 'application/pdf',
         file_size_bytes: file.size,
       });
     } catch (err) {
@@ -364,54 +363,102 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
         };
         saveLocalPayment(initialPayment);
 
-        // Record uploaded documents in local store
+        // Record uploaded documents in local store & IndexedDB
+        let aadharDoc: DocumentRecord | null = null;
         if (aadharFile) {
-          const aadharDoc: DocumentRecord = {
-            id: `doc-aadhar-${Date.now()}`,
+          const docId = `doc-aadhar-${Date.now()}`;
+          const safeName = aadharFile.name.replace(/\s+/g, '_');
+          const storagePath = `tenants/${generatedId}/aadhar_${safeName}`;
+          let fileData: string | null = null;
+          if (aadharFile.size <= 3 * 1024 * 1024) {
+            try {
+              fileData = await fileToDataUrl(aadharFile);
+            } catch {
+              // ignore
+            }
+          }
+          await storeDocumentFile(docId, aadharFile, aadharFile.name, aadharFile.type);
+          await storeDocumentFile(storagePath, aadharFile, aadharFile.name, aadharFile.type);
+
+          aadharDoc = {
+            id: docId,
             tenant_id: generatedId,
             room_id: formData.roomId,
             doc_type: 'AADHAR_CARD',
-            storage_path: `tenants/${generatedId}/aadhar_${aadharFile.name}`,
+            storage_path: storagePath,
             file_name: aadharFile.name,
             mime_type: aadharFile.type || 'application/pdf',
             file_size_bytes: aadharFile.size,
             created_at: new Date().toISOString(),
             tenant: newTenant,
             room: selectedRoom,
+            file_data: fileData,
           };
           saveLocalDocument(aadharDoc);
         }
 
+        let agreementDoc: DocumentRecord | null = null;
         if (agreementFile) {
-          const agreementDoc: DocumentRecord = {
-            id: `doc-agreement-${Date.now()}`,
+          const docId = `doc-agreement-${Date.now()}`;
+          const safeName = agreementFile.name.replace(/\s+/g, '_');
+          const storagePath = `tenants/${generatedId}/agreement_${safeName}`;
+          let fileData: string | null = null;
+          if (agreementFile.size <= 3 * 1024 * 1024) {
+            try {
+              fileData = await fileToDataUrl(agreementFile);
+            } catch {
+              // ignore
+            }
+          }
+          await storeDocumentFile(docId, agreementFile, agreementFile.name, agreementFile.type);
+          await storeDocumentFile(storagePath, agreementFile, agreementFile.name, agreementFile.type);
+
+          agreementDoc = {
+            id: docId,
             tenant_id: generatedId,
             room_id: formData.roomId,
             doc_type: 'RENTAL_AGREEMENT',
-            storage_path: `tenants/${generatedId}/agreement_${agreementFile.name}`,
+            storage_path: storagePath,
             file_name: agreementFile.name,
             mime_type: agreementFile.type || 'application/pdf',
             file_size_bytes: agreementFile.size,
             created_at: new Date().toISOString(),
             tenant: newTenant,
             room: selectedRoom,
+            file_data: fileData,
           };
           saveLocalDocument(agreementDoc);
         }
 
+        let photoDoc: DocumentRecord | null = null;
         if (tenantPhoto) {
-          const photoDoc: DocumentRecord = {
-            id: `doc-photo-${Date.now()}`,
+          const docId = `doc-photo-${Date.now()}`;
+          const safeName = tenantPhoto.name.replace(/\s+/g, '_');
+          const storagePath = `tenants/${generatedId}/photo_${safeName}`;
+          let fileData: string | null = null;
+          if (tenantPhoto.size <= 3 * 1024 * 1024) {
+            try {
+              fileData = await fileToDataUrl(tenantPhoto);
+            } catch {
+              // ignore
+            }
+          }
+          await storeDocumentFile(docId, tenantPhoto, tenantPhoto.name, tenantPhoto.type);
+          await storeDocumentFile(storagePath, tenantPhoto, tenantPhoto.name, tenantPhoto.type);
+
+          photoDoc = {
+            id: docId,
             tenant_id: generatedId,
             room_id: formData.roomId,
             doc_type: 'TENANT_PHOTO',
-            storage_path: `tenants/${generatedId}/photo_${tenantPhoto.name}`,
+            storage_path: storagePath,
             file_name: tenantPhoto.name,
             mime_type: tenantPhoto.type || 'image/jpeg',
             file_size_bytes: tenantPhoto.size,
             created_at: new Date().toISOString(),
             tenant: newTenant,
             room: selectedRoom,
+            file_data: fileData,
           };
           saveLocalDocument(photoDoc);
         }
@@ -446,9 +493,9 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
             .single();
 
           if (!tenantError && tenant) {
-            if (aadharFile) await uploadToVault(aadharFile, tenant.id, 'AADHAR_CARD');
-            if (agreementFile) await uploadToVault(agreementFile, tenant.id, 'RENTAL_AGREEMENT');
-            if (tenantPhoto) await uploadToVault(tenantPhoto, tenant.id, 'TENANT_PHOTO');
+            if (aadharFile && aadharDoc) await uploadToVault(aadharFile, tenant.id, 'AADHAR_CARD', aadharDoc.storage_path, aadharDoc.id);
+            if (agreementFile && agreementDoc) await uploadToVault(agreementFile, tenant.id, 'RENTAL_AGREEMENT', agreementDoc.storage_path, agreementDoc.id);
+            if (tenantPhoto && photoDoc) await uploadToVault(tenantPhoto, tenant.id, 'TENANT_PHOTO', photoDoc.storage_path, photoDoc.id);
           }
 
           // If advance slice was recorded, sync payment to Supabase

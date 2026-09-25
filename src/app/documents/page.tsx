@@ -11,6 +11,9 @@ import {
   getLocalDocuments, saveLocalDocument, deleteLocalDocument, 
   getLocalTenants, getLocalRooms 
 } from '@/lib/store/app-store';
+import { 
+  storeDocumentFile, getDocumentBlobUrl, deleteDocumentFile, fileToDataUrl 
+} from '@/lib/store/document-storage';
 import { createClient } from '@/lib/supabase/client';
 import DocumentViewerModal from '@/components/documents/document-viewer-modal';
 
@@ -97,7 +100,21 @@ export default function DocumentsPage() {
     const selectedTenant = tenants.find((t) => t.id === tenantId);
     const selectedRoom = rooms.find((r) => r.id === roomId || (selectedTenant && r.id === selectedTenant.room_id));
     const generatedId = `doc-${Date.now()}`;
-    const storagePath = `tenants/${tenantId || 'general'}/${docType.toLowerCase()}_${fileName.replace(/\s+/g, '_')}`;
+    const safeFileName = fileName.trim().replace(/\s+/g, '_');
+    const storagePath = `tenants/${tenantId || 'general'}/${docType.toLowerCase()}_${safeFileName}`;
+
+    let fileData: string | null = null;
+    if (fileObject) {
+      if (fileObject.size <= 3 * 1024 * 1024) {
+        try {
+          fileData = await fileToDataUrl(fileObject);
+        } catch {
+          // ignore
+        }
+      }
+      await storeDocumentFile(generatedId, fileObject, fileObject.name, fileObject.type);
+      await storeDocumentFile(storagePath, fileObject, fileObject.name, fileObject.type);
+    }
 
     const newDoc: DocumentRecord = {
       id: generatedId,
@@ -111,6 +128,7 @@ export default function DocumentsPage() {
       created_at: new Date().toISOString(),
       tenant: selectedTenant,
       room: selectedRoom,
+      file_data: fileData,
     };
 
     saveLocalDocument(newDoc);
@@ -126,6 +144,7 @@ export default function DocumentsPage() {
       }
 
       await supabase.from('documents').insert({
+        id: newDoc.id,
         tenant_id: newDoc.tenant_id,
         room_id: newDoc.room_id,
         doc_type: newDoc.doc_type,
@@ -150,6 +169,10 @@ export default function DocumentsPage() {
     if (confirm('Are you sure you want to remove this document from the vault?')) {
       const targetDoc = documents.find((d) => d.id === docId);
       deleteLocalDocument(docId);
+      if (targetDoc) {
+        await deleteDocumentFile(docId);
+        if (targetDoc.storage_path) await deleteDocumentFile(targetDoc.storage_path);
+      }
       setDocuments((prev) => prev.filter((d) => d.id !== docId));
       try {
         const supabase = createClient();
@@ -161,6 +184,38 @@ export default function DocumentsPage() {
         console.warn('Supabase delete document note:', err);
       }
     }
+  };
+
+  const handleDownloadDocument = async (doc: DocumentRecord) => {
+    // 1. Direct Base64 data URL
+    if (doc.file_data) {
+      const a = document.createElement('a');
+      a.href = doc.file_data;
+      a.download = doc.file_name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return;
+    }
+
+    // 2. Direct IndexedDB Blob URL
+    try {
+      const blobUrl = (await getDocumentBlobUrl(doc.id)) || (await getDocumentBlobUrl(doc.storage_path));
+      if (blobUrl) {
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = doc.file_name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        return;
+      }
+    } catch (err) {
+      console.warn('Local document download check note:', err);
+    }
+
+    // 3. Remote Supabase URL
+    window.open(`/api/document-url?path=${encodeURIComponent(doc.storage_path)}`, '_blank');
   };
 
   const filteredDocs = documents.filter((d) => {
@@ -308,17 +363,15 @@ export default function DocumentsPage() {
                     <Eye className="w-3.5 h-3.5" />
                     View
                   </button>
-                  <a
-                    href={`/api/document-url?path=${encodeURIComponent(doc.storage_path)}`}
-                    download={doc.file_name}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex-1 text-center inline-flex items-center justify-center gap-1.5 text-xs font-bold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 py-2 rounded-lg border border-slate-200 transition-colors"
-                    title="Download document"
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadDocument(doc)}
+                    className="flex-1 text-center inline-flex items-center justify-center gap-1.5 text-xs font-bold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 py-2 rounded-lg border border-slate-200 transition-colors cursor-pointer"
+                    title="Download exact document file"
                   >
                     <Download className="w-3.5 h-3.5" />
                     Download
-                  </a>
+                  </button>
                 </div>
               </div>
             );
