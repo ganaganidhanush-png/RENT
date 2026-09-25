@@ -12,6 +12,16 @@ import { createClient } from '@/lib/supabase/client';
 import EditTenantModal from '@/components/tenants/edit-tenant-modal';
 import RecordPaymentModal from '@/components/payments/record-payment-modal';
 
+function getOrdinal(d: number) {
+  if (d > 3 && d < 21) return 'th';
+  switch (d % 10) {
+    case 1: return 'st';
+    case 2: return 'nd';
+    case 3: return 'rd';
+    default: return 'th';
+  }
+}
+
 export default function TenantsPage() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -297,6 +307,16 @@ export default function TenantsPage() {
                     <div className="flex items-center gap-2 font-medium text-slate-600">
                       <Calendar className="w-3.5 h-3.5 text-slate-500" />
                       <span>{t.move_in_date} → {t.lease_end_date}</span>
+                    </div>
+
+                    <div className="flex items-center justify-between p-2 rounded-lg bg-indigo-50/80 border border-indigo-200 text-xs">
+                      <span className="font-semibold text-slate-700 flex items-center gap-1.5">
+                        <Calendar className="w-3.5 h-3.5 text-indigo-600" />
+                        Rent Due:
+                      </span>
+                      <span className="font-extrabold text-indigo-900 bg-white px-2 py-0.5 rounded shadow-2xs border border-indigo-100">
+                        {t.rent_due_day || 5}{getOrdinal(t.rent_due_day || 5)} of every month
+                      </span>
                     </div>
                   </div>
 

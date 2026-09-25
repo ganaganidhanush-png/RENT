@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS public.tenants (
     actual_move_out_date DATE,
     monthly_rent NUMERIC(10, 2) NOT NULL,
     security_deposit_paid NUMERIC(10, 2) NOT NULL DEFAULT 0.00,
+    rent_due_day INTEGER NOT NULL DEFAULT 5 CHECK (rent_due_day BETWEEN 1 AND 31), -- Recurring day of the month rent is due (e.g. 5th of every month)
     status tenant_status NOT NULL DEFAULT 'ACTIVE',
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())

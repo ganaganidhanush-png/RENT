@@ -47,6 +47,7 @@ function EditTenantModalContent({
   const [securityDeposit, setSecurityDeposit] = useState(() => String(tenant.security_deposit_paid || ''));
   const [moveInDate, setMoveInDate] = useState(() => tenant.move_in_date || '');
   const [leaseEndDate, setLeaseEndDate] = useState(() => tenant.lease_end_date || '');
+  const [rentDueDay, setRentDueDay] = useState<number>(() => tenant.rent_due_day || 5);
   const [actualMoveOutDate, setActualMoveOutDate] = useState(() => tenant.actual_move_out_date || '');
   const [emergencyName, setEmergencyName] = useState(() => tenant.emergency_contact_name || '');
   const [emergencyPhone, setEmergencyPhone] = useState(() => tenant.emergency_contact_phone || '');
@@ -143,6 +144,7 @@ function EditTenantModalContent({
       room_id: roomId || null,
       monthly_rent: Number(monthlyRent),
       security_deposit_paid: Number(securityDeposit),
+      rent_due_day: Number(rentDueDay || 5),
       move_in_date: moveInDate,
       lease_end_date: leaseEndDate,
       actual_move_out_date: status === 'MOVED_OUT' ? (actualMoveOutDate || new Date().toISOString().split('T')[0]) : null,
@@ -174,6 +176,7 @@ function EditTenantModalContent({
           room_id: updatedTenant.room_id,
           monthly_rent: updatedTenant.monthly_rent,
           security_deposit_paid: updatedTenant.security_deposit_paid,
+          rent_due_day: updatedTenant.rent_due_day,
           move_in_date: updatedTenant.move_in_date,
           lease_end_date: updatedTenant.lease_end_date,
           actual_move_out_date: updatedTenant.actual_move_out_date,
@@ -563,6 +566,49 @@ function EditTenantModalContent({
                 onChange={(e) => setSecurityDeposit(e.target.value)}
                 className="w-full text-xs font-bold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:outline-none"
               />
+            </div>
+          </div>
+
+          {/* Monthly Rent Due Date */}
+          <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <span>Monthly Rent Due Day *</span>
+                <span className="text-[11px] font-semibold text-slate-500">(Day of every month when rent is expected)</span>
+              </label>
+              <span className="text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                {rentDueDay}{rentDueDay === 1 ? 'st' : rentDueDay === 2 ? 'nd' : rentDueDay === 3 ? 'rd' : 'th'} of every month
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={1}
+                max={31}
+                value={rentDueDay}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value, 10);
+                  if (!isNaN(val)) setRentDueDay(Math.max(1, Math.min(31, val)));
+                }}
+                required
+                className="w-20 text-xs font-bold border border-slate-300 rounded-lg p-2 bg-white text-slate-900 focus:outline-none"
+              />
+              <div className="flex flex-wrap gap-1">
+                {[1, 5, 10, 15].map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setRentDueDay(d)}
+                    className={`px-2.5 py-1 text-xs font-bold rounded-lg border transition-all cursor-pointer ${
+                      rentDueDay === d
+                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                    }`}
+                  >
+                    {d}{d === 1 ? 'st' : d === 2 ? 'nd' : d === 3 ? 'rd' : 'th'}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 

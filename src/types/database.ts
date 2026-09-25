@@ -52,6 +52,7 @@ export interface Tenant {
   actual_move_out_date?: string | null;
   monthly_rent: number;
   security_deposit_paid: number;
+  rent_due_day?: number; // Day of the month when rent is due (1-31, e.g. 5th of every month)
   status: TenantStatus;
   created_at?: string;
   updated_at?: string;

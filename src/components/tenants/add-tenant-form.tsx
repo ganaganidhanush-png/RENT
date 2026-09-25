@@ -41,6 +41,7 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
     leaseEndDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
     monthlyRent: String(DEFAULT_ROOMS[0].base_rent),
     securityDeposit: String(DEFAULT_ROOMS[0].security_deposit),
+    rentDueDay: 5,
     familyMembersCount: 2,
     primaryOccupation: '',
   }));
@@ -277,6 +278,7 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
         lease_end_date: formData.leaseEndDate,
         monthly_rent: Number(formData.monthlyRent),
         security_deposit_paid: Number(formData.securityDeposit),
+        rent_due_day: Number(formData.rentDueDay || 5),
         status: 'ACTIVE',
         room: selectedRoom,
         created_at: new Date().toISOString(),
@@ -383,6 +385,7 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
             lease_end_date: newTenant.lease_end_date,
             monthly_rent: newTenant.monthly_rent,
             security_deposit_paid: newTenant.security_deposit_paid,
+            rent_due_day: newTenant.rent_due_day || 5,
             status: 'ACTIVE',
           })
           .select()
@@ -568,7 +571,7 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-800 mb-1.5">Move-In Date *</label>
               <input
@@ -589,6 +592,53 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
                 required
                 className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 focus:outline-none"
               />
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-bold text-slate-800">
+                  Rent Due Date (Every Month) *
+                </label>
+                <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                  {formData.rentDueDay}{formData.rentDueDay === 1 ? 'st' : formData.rentDueDay === 2 ? 'nd' : formData.rentDueDay === 3 ? 'rd' : 'th'} of month
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  max={31}
+                  value={formData.rentDueDay}
+                  onChange={(e) => {
+                    const parsed = parseInt(e.target.value, 10);
+                    if (!isNaN(parsed)) {
+                      setFormData({ ...formData, rentDueDay: Math.max(1, Math.min(31, parsed)) });
+                    }
+                  }}
+                  required
+                  placeholder="Day (1-31)"
+                  className="w-20 text-xs font-bold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 focus:outline-none"
+                />
+                <div className="flex flex-wrap gap-1">
+                  {[1, 5, 10, 15].map((dayNum) => (
+                    <button
+                      key={dayNum}
+                      type="button"
+                      onClick={() => setFormData({ ...formData, rentDueDay: dayNum })}
+                      className={`px-2 py-1 text-xs font-bold rounded-lg border transition-all cursor-pointer ${
+                        Number(formData.rentDueDay) === dayNum
+                          ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                          : 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'
+                      }`}
+                    >
+                      {dayNum}{dayNum === 1 ? 'st' : dayNum === 2 ? 'nd' : dayNum === 3 ? 'rd' : 'th'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1 font-medium">
+                Day of the month when tenant must pay rent
+              </p>
             </div>
           </div>
         </div>

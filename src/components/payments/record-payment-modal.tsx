@@ -360,6 +360,23 @@ export default function RecordPaymentModal({
                 ))}
               </select>
             </div>
+
+            {(() => {
+              const activeTenant = tenants.find((t) => t.id === selectedTenantId);
+              if (!activeTenant) return null;
+              const due = activeTenant.rent_due_day || 5;
+              const suffix = due === 1 ? 'st' : due === 2 ? 'nd' : due === 3 ? 'rd' : 'th';
+              return (
+                <div className="sm:col-span-2 px-3 py-1.5 bg-indigo-50 border border-indigo-200 rounded-lg text-xs flex flex-wrap items-center justify-between text-indigo-950 font-medium">
+                  <span>
+                    Monthly Rent: <strong>₹{Number(activeTenant.monthly_rent).toLocaleString('en-IN')}</strong>
+                  </span>
+                  <span className="font-bold text-indigo-700 bg-white px-2 py-0.5 rounded border border-indigo-200">
+                    📅 Rent Due: {due}{suffix} of every month
+                  </span>
+                </div>
+              );
+            })()}
           </div>
 
           {/* Billing Period & Date */}
