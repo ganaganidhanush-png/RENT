@@ -154,56 +154,66 @@ export default function DashboardView({ rooms, recentPayments, expiringTenants, 
             <p className="text-xs text-slate-500 mt-0.5">Ground & First floor unit status and assignments</p>
           </div>
           <span className="text-xs font-semibold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-md">
-            Total: 5 Rooms
+            Total: {stats.totalRooms} Units
           </span>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-          {rooms.map((room) => (
-            <div 
-              key={room.id}
-              className="p-4 rounded-xl border border-slate-200 hover:border-indigo-400/80 transition-all bg-slate-50/50 flex flex-col justify-between h-52 group hover:shadow-sm"
-            >
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-bold text-slate-900">{room.room_number}</span>
-                  <span className="text-[11px] text-slate-400 font-medium">Floor {room.floor}</span>
-                </div>
-                <div className="mb-3">{getStatusBadge(room.status)}</div>
-                <div className="space-y-1">
-                  <p className="text-xs font-bold text-slate-900">
-                    ₹{Number(room.base_rent).toLocaleString('en-IN')}
-                    <span className="text-[10px] font-normal text-slate-400"> /month</span>
-                  </p>
-                  <p className="text-[11px] text-slate-500 line-clamp-2 leading-relaxed">
-                    {room.notes || 'Master room, attached bath'}
-                  </p>
-                </div>
-              </div>
-
-              <div className="pt-3 border-t border-slate-200/80">
-                {room.status === 'VACANT' ? (
-                  <Link
-                    href={`/tenants/new?room_id=${room.id}`}
-                    className="w-full text-center block text-xs font-semibold text-indigo-600 hover:text-white hover:bg-indigo-600 bg-indigo-50 py-1.5 rounded-lg transition-all"
-                  >
-                    + Assign Tenant
-                  </Link>
-                ) : (
-                  <div className="flex items-center justify-between text-xs text-slate-500">
-                    <span className="text-[11px] font-medium text-slate-700">Unit Occupied</span>
-                    <Link
-                      href="/tenants"
-                      className="text-[11px] font-semibold text-indigo-600 hover:underline flex items-center gap-0.5"
-                    >
-                      Details →
-                    </Link>
+        {rooms.length === 0 ? (
+          <div className="text-center py-12 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+            <Building2 className="w-8 h-8 text-slate-400 mx-auto mb-2" />
+            <p className="text-xs font-semibold text-slate-700">No rooms found in database</p>
+            <p className="text-[11px] text-slate-400 mt-1 max-w-sm mx-auto">
+              Your property database is clean and ready. Add rooms in Supabase to start tracking occupancy.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+            {rooms.map((room) => (
+              <div 
+                key={room.id}
+                className="p-4 rounded-xl border border-slate-200 hover:border-indigo-400/80 transition-all bg-slate-50/50 flex flex-col justify-between h-52 group hover:shadow-sm"
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-bold text-slate-900">{room.room_number}</span>
+                    <span className="text-[11px] text-slate-400 font-medium">Floor {room.floor}</span>
                   </div>
-                )}
+                  <div className="mb-3">{getStatusBadge(room.status)}</div>
+                  <div className="space-y-1">
+                    <p className="text-xs font-bold text-slate-900">
+                      ₹{Number(room.base_rent).toLocaleString('en-IN')}
+                      <span className="text-[10px] font-normal text-slate-400"> /month</span>
+                    </p>
+                    <p className="text-[11px] text-slate-500 line-clamp-2 leading-relaxed">
+                      {room.notes || 'Master room, attached bath'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-slate-200/80">
+                  {room.status === 'VACANT' ? (
+                    <Link
+                      href={`/tenants/new?room_id=${room.id}`}
+                      className="w-full text-center block text-xs font-semibold text-indigo-600 hover:text-white hover:bg-indigo-600 bg-indigo-50 py-1.5 rounded-lg transition-all"
+                    >
+                      + Assign Tenant
+                    </Link>
+                  ) : (
+                    <div className="flex items-center justify-between text-xs text-slate-500">
+                      <span className="text-[11px] font-medium text-slate-700">Unit Occupied</span>
+                      <Link
+                        href="/tenants"
+                        className="text-[11px] font-semibold text-indigo-600 hover:underline flex items-center gap-0.5"
+                      >
+                        Details →
+                      </Link>
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Bottom Grid: Recent Payments & Lease Expiry Alerts */}

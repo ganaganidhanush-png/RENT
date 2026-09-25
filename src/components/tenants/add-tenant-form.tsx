@@ -65,19 +65,7 @@ export default function AddTenantForm({ vacantRooms: initialVacantRooms }: AddTe
             securityDeposit: String(activeRoom.security_deposit),
           }));
         } else {
-          // If no rooms in DB yet, fallback sample rooms for UI
-          const fallback: Room[] = [
-            { id: '101', room_number: 'Room 101', floor: 1, base_rent: 8500, security_deposit: 17000, status: 'VACANT', notes: 'Ground floor' },
-            { id: '102', room_number: 'Room 102', floor: 1, base_rent: 7500, security_deposit: 15000, status: 'VACANT', notes: 'Garden facing' },
-            { id: '201', room_number: 'Room 201', floor: 2, base_rent: 8500, security_deposit: 17000, status: 'VACANT', notes: 'Balcony' },
-          ];
-          setRooms(fallback);
-          setFormData((prev) => ({
-            ...prev,
-            roomId: fallback[0].id,
-            monthlyRent: String(fallback[0].base_rent),
-            securityDeposit: String(fallback[0].security_deposit),
-          }));
+          setRooms([]);
         }
       } catch (err) {
         console.error('Error fetching rooms:', err);

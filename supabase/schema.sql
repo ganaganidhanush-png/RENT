@@ -154,17 +154,7 @@ CREATE TRIGGER trg_sync_room_occupancy
 AFTER INSERT OR UPDATE OF status, room_id ON public.tenants
 FOR EACH ROW EXECUTE FUNCTION sync_room_occupancy();
 
--- 8. Seed 5 Rooms
-INSERT INTO public.rooms (room_number, floor, base_rent, security_deposit, status, notes)
-VALUES 
-    ('Room 101', 1, 8500.00, 17000.00, 'VACANT', 'Ground floor master bedroom, attached bath'),
-    ('Room 102', 1, 7500.00, 15000.00, 'VACANT', 'Ground floor garden facing room'),
-    ('Room 201', 2, 8500.00, 17000.00, 'VACANT', 'First floor corner room with private balcony'),
-    ('Room 202', 2, 8000.00, 16000.00, 'VACANT', 'First floor standard room, well ventilated'),
-    ('Room 203', 2, 7000.00, 14000.00, 'VACANT', 'First floor compact studio')
-ON CONFLICT (room_number) DO NOTHING;
-
--- 9. Row Level Security Policies
+-- 8. Row Level Security Policies
 ALTER TABLE public.rooms ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tenants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.documents ENABLE ROW LEVEL SECURITY;
